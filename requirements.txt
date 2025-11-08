@@ -1,0 +1,15 @@
+aiohttp
+asknews
+beautifulsoup4
+boilerpy3
+dateparser
+dotenv
+matplotlib
+numpy
+openai
+pandas
+python-dotenv
+readability-lxml
+requests
+scipy
+trafilatura
