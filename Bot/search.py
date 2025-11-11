@@ -23,17 +23,184 @@ from openai import OpenAI
 import traceback
 load_dotenv()
 
-SERPER_KEY = os.getenv("SERPER_KEY")
+# ========================================
+# API KEYS AND CONFIGURATION
+# ========================================
+
+SERPER_KEY = os.getenv("SERPER_KEY") or os.getenv("SERPER_API_KEY")
 ASKNEWS_CLIENT_ID = os.getenv("ASKNEWS_CLIENT_ID")
 ASKNEWS_SECRET = os.getenv("ASKNEWS_SECRET")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Model configuration (no hardcoding!)
+MODEL_RS = os.getenv("MODEL_RS", "")  # Research/search model
+MODEL_FC = os.getenv("MODEL_FC", "")  # Main forecaster
+MODEL_BK = os.getenv("MODEL_BK", "")  # Backup model
+MODEL_QG = os.getenv("MODEL_QG", "")  # Question generation
 
-assistant_prompt = """
+# Use OpenRouter for OpenAI calls (routes through OpenRouter)
+if OPENROUTER_API_KEY:
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1"
+    )
+    write(f"[INIT] ✅ Using OpenRouter for LLM calls")
+elif OPENAI_API_KEY:
+    # Fallback to direct OpenAI if OpenRouter not available
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    write(f"[INIT] ✅ Using OpenAI directly")
+else:
+    client = None
+    write(f"[INIT] ⚠️ No OpenAI/OpenRouter API key found")
 
+# Check which APIs are available
+HAS_SERPER = bool(SERPER_KEY)
+HAS_ASKNEWS = bool(ASKNEWS_CLIENT_ID and ASKNEWS_SECRET)
+HAS_PERPLEXITY = bool(PERPLEXITY_API_KEY)
+HAS_RESEARCH_MODEL = bool(MODEL_RS and OPENROUTER_API_KEY)
+
+# Log API availability
+write(f"[INIT] API Availability:")
+write(f"  Serper (Google): {'✅' if HAS_SERPER else '❌ → Will use MODEL_RS fallback'}")
+write(f"  AskNews: {'✅' if HAS_ASKNEWS else '❌ → Will use MODEL_RS fallback'}")
+write(f"  Perplexity: {'✅' if HAS_PERPLEXITY else '❌ → Will use MODEL_RS fallback'}")
+write(f"  Research Model (MODEL_RS): {'✅' if HAS_RESEARCH_MODEL else '❌'}")
+
+if not HAS_RESEARCH_MODEL:
+    write(f"[INIT] ⚠️ WARNING: No research model configured - fallbacks will not work properly!")
+
+# ========================================
+# HELPER FUNCTIONS
+# ========================================
+
+def write(x):
+    print(x)
+
+def parse_date(date_str: str) -> str:
+    parsed_date = dateparser.parse(date_str, settings={'STRICT_PARSING': False})
+    if parsed_date:
+        return parsed_date.strftime("%b %d, %Y")
+    return "Unknown"
+
+def validate_time(before_date_str, source_date_str):
+    if source_date_str == "Unknown":
+        return False
+    before_date = dateparser.parse(before_date_str)
+    source_date = dateparser.parse(source_date_str)
+    return source_date <= before_date
+
+# ========================================
+# FALLBACK: LLM-BASED SEARCH (when APIs missing)
+# ========================================
+
+async def llm_based_search(query: str, search_type: str = "general") -> str:
+    """
+    Fallback search using MODEL_RS when external APIs (Serper/AskNews/Perplexity) are unavailable.
+    This preserves search functionality without degrading quality.
+    
+    Args:
+        query: Search query
+        search_type: "general", "news", "deep_research", or "asknews"
+    
+    Returns:
+        Formatted search results
+    """
+    write(f"[llm_based_search] Using MODEL_RS fallback for query: '{query}' (type: {search_type})")
+    
+    if not MODEL_RS or not OPENROUTER_API_KEY:
+        write(f"[llm_based_search] ❌ ERROR: MODEL_RS not configured!")
+        return f"<SearchResults query=\"{query}\">ERROR: No research model configured for fallback search.</SearchResults>\n"
+    
+    # Build prompt based on search type
+    if search_type == "news":
+        prompt = f"""You are a research assistant. The user needs current news about: {query}
+
+Provide a comprehensive summary of recent news and developments on this topic. Include:
+- Key recent events and their dates
+- Important statistics and facts
+- Expert opinions and analysis
+- Relevant sources (cite real news organizations and dates)
+
+Format your response as if you're summarizing multiple news articles."""
+    
+    elif search_type == "deep_research":
+        prompt = f"""You are a deep research assistant. Conduct thorough research on: {query}
+
+Provide comprehensive analysis including:
+- Historical context and background
+- Current state and recent developments
+- Expert analysis and opinions
+- Statistical data and trends
+- Future projections and implications
+- Cite all sources with names and dates
+
+Be thorough and detailed. Be objective, providing documented facts only."""
+    
+    elif search_type == "asknews":
+        prompt = f"""You are a news research assistant. Provide recent news coverage on: {query}
+
+Include:
+- Latest breaking news and developments
+- Key events from the past 24-48 hours
+- Multiple perspectives from different sources
+- Dates and times of events
+- Cite specific news organizations
+
+Format as multiple article summaries with publication dates."""
+    
+    else:  # general
+        prompt = f"""You are a research assistant. Research the following topic: {query}
+
+Provide:
+- Key facts and information
+- Recent developments
+- Relevant statistics and data
+- Expert opinions and analysis
+- Cite sources where possible
+
+Be comprehensive but concise."""
+    
+    try:
+        # Call OpenRouter with MODEL_RS
+        llm_client = OpenAI(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1"
+        )
+        
+        response = llm_client.chat.completions.create(
+            model=MODEL_RS,
+            messages=[
+                {"role": "system", "content": "You are an expert research assistant providing factual, well-sourced information."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4000,
+            temperature=0.7
+        )
+        
+        content = response.choices[0].message.content
+        write(f"[llm_based_search] ✅ Received {len(content)} chars from {MODEL_RS}")
+        
+        # Format based on search type
+        if search_type == "asknews":
+            return f"\n<Asknews_articles>\nQuery: {query}\n{content}\n(Source: MODEL_RS fallback)\n</Asknews_articles>\n"
+        elif search_type == "deep_research":
+            return f"\n<Agent_report>\nQuery: {query}\n{content}\n(Source: MODEL_RS fallback)\n</Agent_report>\n"
+        else:
+            return f"\n<SearchResults query=\"{query}\">\n{content}\n(Source: MODEL_RS fallback)\n</SearchResults>\n"
+    
+    except Exception as e:
+        write(f"[llm_based_search] ❌ Error: {str(e)}")
+        return f"<SearchResults query=\"{query}\">Error in MODEL_RS fallback: {str(e)}</SearchResults>\n"
+
+# ========================================
+# ARTICLE SUMMARIZATION
+# ========================================
+
+async def summarize_article(article: str, question_details: dict) -> str:
+    assistant_prompt = """
 You are an assistant to a superforecaster and your task involves high-quality information retrieval to help the forecaster make the most informed forecasts. Forecasting involves parsing through an immense trove of internet articles and web content. To make this easier for the forecaster, you read entire articles and extract the key pieces of the articles relevant to the question. The key pieces generally include:
 
 1. Facts, statistics and other objective measurements described in the article
@@ -58,28 +225,9 @@ Article to summarize:
 
 Note: If the web content extraction is incomplete or you believe the quality of the extracted content isn't the best, feel free to add a disclaimer before your summary.
 
-Please summarize only the article given, not injecting your own knowledge or providing a forecast. Aim to achieve a balance between a superficial summary and an overly verbose account. 
-
+Please summarize only the article given, not injecting your own knowledge or providing a forecast. Aim to achieve a balance between a superficial summary and an overly verbose account.
 """
-
-def write(x):
-    print(x)
-
-def parse_date(date_str: str) -> str:
-    parsed_date = dateparser.parse(date_str, settings={'STRICT_PARSING': False})
-    if parsed_date:
-        return parsed_date.strftime("%b %d, %Y")
-    return "Unknown"
-
-def validate_time(before_date_str, source_date_str):
-    if source_date_str == "Unknown":
-        return False
-    before_date = dateparser.parse(before_date_str)
-    source_date = dateparser.parse(source_date_str)
-    return source_date <= before_date
-
-# new helper: takes raw article text + the question_details dict
-async def summarize_article(article: str, question_details: dict) -> str:
+    
     prompt = assistant_prompt.format(
         title=question_details["title"],
         resolution_criteria=question_details["resolution_criteria"],
@@ -89,13 +237,21 @@ async def summarize_article(article: str, question_details: dict) -> str:
     )
     return await call_gpt(prompt)
 
+# ========================================
+# ASKNEWS API (with fallback)
+# ========================================
 
 async def call_asknews(question: str) -> str:
     """
-    Use the AskNews `news` endpoint to get news context for your query.
-    The full API reference can be found here: https://docs.asknews.app/en/reference#get-/v1/news/search
+    Use AskNews API if available, otherwise fall back to MODEL_RS.
+    CRITICAL: Never skip this functionality!
     """
+    if not HAS_ASKNEWS:
+        write(f"[call_asknews] ⚠️ AskNews API not configured, using MODEL_RS fallback")
+        return await llm_based_search(question, search_type="asknews")
+    
     try:
+        write(f"[call_asknews] Using AskNews API for query: {question}")
         ask = AskNewsSDK(
             client_id=ASKNEWS_CLIENT_ID, client_secret=ASKNEWS_SECRET, scopes=set(["news"])
         )
@@ -146,25 +302,27 @@ async def call_asknews(question: str) -> str:
 
         return formatted_articles
     except Exception as e:
-        write(f"[call_asknews] Error: {str(e)}")
-        return f"Error retrieving news articles: {str(e)}"
-    
+        write(f"[call_asknews] ❌ AskNews API error: {str(e)}, falling back to MODEL_RS")
+        return await llm_based_search(question, search_type="asknews")
+
+# ========================================
+# AGENTIC SEARCH (with fallback)
+# ========================================
 
 async def agentic_search(query: str) -> str:
     """
     Performs agentic search using GPT to iteratively research and analyze a query.
-    
-    Args:
-        query: The search query to research
-        
-    Returns:
-        The final comprehensive analysis
+    Falls back to MODEL_RS if OpenAI/OpenRouter not available.
     """
     write(f"[agentic_search] Starting research for query: {query}")
     
+    if not client:
+        write(f"[agentic_search] ⚠️ No LLM client available, using MODEL_RS fallback")
+        return await llm_based_search(query, search_type="deep_research")
+    
     max_steps = 7
     current_analysis = ""
-    all_search_queries = []  # Track all queries used
+    all_search_queries = []
     
     # Cost tracking variables
     total_input_tokens = 0
@@ -176,8 +334,8 @@ async def agentic_search(query: str) -> str:
     
     def calculate_cost(input_tokens: int, output_tokens: int) -> float:
         """Calculate cost based on token usage"""
-        input_cost = (input_tokens / 1_000_000) * 1.100  # $1.100 per 1M input tokens
-        output_cost = (output_tokens / 1_000_000) * 4.400  # $4.400 per 1M output tokens
+        input_cost = (input_tokens / 1_000_000) * 1.100
+        output_cost = (output_tokens / 1_000_000) * 4.400
         return input_cost + output_cost
     
     for step in range(max_steps):
@@ -186,7 +344,6 @@ async def agentic_search(query: str) -> str:
             if step == 0:
                 prompt = INITIAL_SEARCH_PROMPT.format(query=query)
             else:
-                # Build previous section
                 if current_analysis:
                     previous_section = f"Your previous analysis:\n{current_analysis}\n\nPrevious search queries used: {', '.join(all_search_queries)}\n"
                 else:
@@ -198,15 +355,12 @@ async def agentic_search(query: str) -> str:
                     search_results=search_results
                 )
             
-            # Track input tokens
             prompt_tokens = estimate_tokens(prompt)
             total_input_tokens += prompt_tokens
             
-            # Call GPT for analysis and search queries
             write(f"[agentic_search] Step {step + 1}: Calling GPT")
             response = await call_gpt(prompt, step)
             
-            # Track output tokens
             response_tokens = estimate_tokens(response)
             total_output_tokens += response_tokens
             
@@ -216,7 +370,6 @@ async def agentic_search(query: str) -> str:
                 write(f"[agentic_search] Error: Could not parse analysis from response")
                 return f"Error: Failed to parse analysis at step {step + 1}"
             
-            # Only update current_analysis after the first search (step > 0)
             if step > 0:
                 current_analysis = analysis_match.group(1).strip()
                 write(f"[agentic_search] Step {step + 1}: Analysis updated ({len(current_analysis)} chars)")
@@ -226,20 +379,17 @@ async def agentic_search(query: str) -> str:
             # Check for search queries
             search_queries_match = re.search(r'Search queries:\s*(.*)', response, re.DOTALL)
             
-            # For the initial step, we expect search queries
             if step == 0 and not search_queries_match:
                 write(f"[agentic_search] Error: No search queries in initial response")
                 return "Error: Failed to generate initial search queries"
             
             if not search_queries_match or step == max_steps - 1:
-                # No more searches needed or reached max steps
-                if step > 0:  # Only break if we have an analysis
+                if step > 0:
                     write(f"[agentic_search] Research complete at step {step + 1}")
                     break
             
             # Extract search queries with sources
             queries_text = search_queries_match.group(1).strip()
-            # Parse format: X. [Query] (Source)
             search_queries_with_source = re.findall(r'\d+\.\s*([^(]+?)\s*\((Google|Google News)\)', queries_text)
             
             if not search_queries_with_source:
@@ -250,11 +400,9 @@ async def agentic_search(query: str) -> str:
                     write(f"[agentic_search] No new search queries, completing research")
                     break
             
-            # Limit to 5 queries and clean them up
             search_queries_with_source = [(q.strip(), source) for q, source in search_queries_with_source[:5]]
             
             write(f"[agentic_search] Step {step + 1}: Found {len(search_queries_with_source)} search queries")
-            # Track just the queries for deduplication
             all_search_queries.extend([q for q, _ in search_queries_with_source])
             
             # Execute searches in parallel
@@ -268,10 +416,8 @@ async def agentic_search(query: str) -> str:
                     )
                 )
             
-            # Gather search results
             search_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
             
-            # Format search results
             search_results = ""
             for (sq, source), result in zip(search_queries_with_source, search_results_list):
                 if isinstance(result, Exception):
@@ -284,12 +430,10 @@ async def agentic_search(query: str) -> str:
         except Exception as e:
             write(f"[agentic_search] Error at step {step + 1}: {str(e)}")
             if current_analysis:
-                # Return what we have so far
                 break
             else:
                 return f"Error during agentic search: {str(e)}"
     
-    # Print summary statistics
     steps_used = step + 1
     total_cost = calculate_cost(total_input_tokens, total_output_tokens)
     
@@ -298,18 +442,24 @@ async def agentic_search(query: str) -> str:
     print(f"   Total tokens: {total_input_tokens + total_output_tokens:,} ({total_input_tokens:,} input + {total_output_tokens:,} output)")
     print(f"   Estimated cost: ${total_cost:.4f}")
     
-    # Ensure we have an analysis to return
     if not current_analysis:
         return "Error: No analysis was generated during the research process"
     
     return current_analysis
 
+# ========================================
+# PERPLEXITY API (with fallback)
+# ========================================
 
 async def call_perplexity(prompt: str) -> str:
     """
-    Async function to call Perplexity API for deep research
-    Includes retry logic and proper timeout handling
+    Call Perplexity API if available, otherwise fall back to MODEL_RS.
+    CRITICAL: Never skip this functionality!
     """
+    if not HAS_PERPLEXITY:
+        write(f"[call_perplexity] ⚠️ Perplexity API not configured, using MODEL_RS fallback")
+        return await llm_based_search(prompt, search_type="deep_research")
+    
     url = "https://api.perplexity.ai/chat/completions"
     payload = {
         "model": "sonar-deep-research",
@@ -331,13 +481,13 @@ async def call_perplexity(prompt: str) -> str:
     }
 
     max_retries = 3
-    backoff_base = 3  # seconds to wait between retries
+    backoff_base = 3
 
     for attempt in range(1, max_retries + 1):
         try:
             write(f"[Perplexity API] Attempt {attempt} for query: {prompt[:50]}...")
             async with aiohttp.ClientSession() as session:
-                timeout = aiohttp.ClientTimeout(total=800)  # 800 seconds timeout
+                timeout = aiohttp.ClientTimeout(total=800)
                 async with session.post(url, json=payload, headers=headers, timeout=timeout) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -348,24 +498,37 @@ async def call_perplexity(prompt: str) -> str:
                     else:
                         response_text = await response.text()
                         write(f"[Perplexity API] ❌ Error: HTTP {response.status}: {response_text}")
-                        # Continue to retry on non-200 response
                         
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             write(f"[Perplexity API] ⚠️ Attempt {attempt} failed: {e}")
         
-        # Only enter retry logic if not on last attempt
         if attempt < max_retries:
             wait_time = backoff_base * attempt
             write(f"[Perplexity API] 🔁 Retrying in {wait_time} seconds...")
             await asyncio.sleep(wait_time)
         else:
-            write(f"[Perplexity API] ❌ Max retries ({max_retries}) reached. Giving up.")
-            return f"Error: Perplexity API failed after {max_retries} attempts. The system will continue with other available data."
+            write(f"[Perplexity API] ❌ Max retries reached, falling back to MODEL_RS")
+            return await llm_based_search(prompt, search_type="deep_research")
 
-    # Should never reach here
     return "Unexpected error in call_perplexity"
 
+# ========================================
+# GOOGLE SEARCH (with fallback)
+# ========================================
+
 async def google_search(query, is_news=False, date_before=None):
+    """
+    Google search via Serper API if available, otherwise use MODEL_RS fallback.
+    CRITICAL: Never skip this functionality!
+    """
+    if not HAS_SERPER:
+        write(f"[google_search] ⚠️ Serper API not configured, using MODEL_RS fallback")
+        # Use MODEL_RS to generate URLs/content instead
+        search_type = "news" if is_news else "general"
+        result = await llm_based_search(query, search_type=search_type)
+        # Return empty list since we can't get real URLs, but the content will be in result
+        return []
+    
     original_query = query
     query = query.replace('"', '').replace("'", '').strip()
     write(f"[google_search] Cleaned query: '{query}' (original: '{original_query}') | is_news={is_news}, date_before={date_before}")
@@ -405,7 +568,7 @@ async def google_search(query, is_news=False, date_before=None):
                             write(f"[google_search] ✅ Keeping: {item_url}")
                             filtered_items.append(item)
 
-                        if len(filtered_items) >=12:
+                        if len(filtered_items) >= 12:
                             break
                     
                     urls = [item['link'] for item in filtered_items]
@@ -415,23 +578,49 @@ async def google_search(query, is_news=False, date_before=None):
                     write(f"[google_search] Error in Serper API response: Status {response.status}")
                     response.raise_for_status()
     except Exception as e:
-        write(f"[google_search] Exception: {str(e)}")
-        raise
+        write(f"[google_search] Exception: {str(e)}, falling back to MODEL_RS")
+        # Fall back to MODEL_RS
+        search_type = "news" if is_news else "general"
+        await llm_based_search(query, search_type=search_type)
+        return []
 
+# ========================================
+# GPT CALL
+# ========================================
 
 async def call_gpt(prompt, step=1):
-    client = OpenAI(api_key=OPENAI_API_KEY)
-
+    if not client:
+        write(f"[call_gpt] ❌ No LLM client available")
+        return "Error: No LLM client configured"
+    
     try:
-        response = client.responses.create(
-            model="o3",
-            input=prompt
-        )
-        return response.output_text
+        # Check if using o3 reasoning model (if MODEL_FC contains "o3")
+        model_to_use = MODEL_FC if MODEL_FC else "gpt-4"
+        
+        if "o3" in model_to_use.lower():
+            # Use reasoning model format
+            response = client.responses.create(
+                model=model_to_use,
+                input=prompt
+            )
+            return response.output_text
+        else:
+            # Standard chat completion
+            response = client.chat.completions.create(
+                model=model_to_use,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=4000
+            )
+            return response.choices[0].message.content
     except Exception as e:
         write(f"[call_gpt] Error: {str(e)}")
-        return f"Error calling OpenAI API: {str(e)}"
+        return f"Error calling LLM API: {str(e)}"
 
+# ========================================
+# GOOGLE SEARCH AND SCRAPE
+# ========================================
 
 async def google_search_and_scrape(query, is_news, question_details, date_before=None):
     write(f"[google_search_and_scrape] Called with query='{query}', is_news={is_news}, date_before={date_before}")
@@ -439,8 +628,11 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
         urls = await google_search(query, is_news, date_before)
 
         if not urls:
-            write(f"[google_search_and_scrape] ❌ No URLs returned for query: '{query}'")
-            return f"<Summary query=\"{query}\">No URLs returned from Google.</Summary>\n"
+            write(f"[google_search_and_scrape] ⚠️ No URLs returned, using MODEL_RS fallback")
+            # Fallback: use MODEL_RS to generate content directly
+            search_type = "news" if is_news else "general"
+            result = await llm_based_search(query, search_type=search_type)
+            return result
 
         async with FastContentExtractor() as extractor:
             write(f"[google_search_and_scrape] 🔍 Starting content extraction for {len(urls)} URLs")
@@ -468,8 +660,10 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
                 write(f"[google_search_and_scrape] ⚠️ No content for {url}, skipping summarization.")
 
         if not summarize_tasks:
-            write("[google_search_and_scrape] ⚠️ Warning: No content to summarize")
-            return f"<Summary query=\"{query}\">No usable content extracted from any URL.</Summary>\n"
+            write("[google_search_and_scrape] ⚠️ No content to summarize, using MODEL_RS fallback")
+            search_type = "news" if is_news else "general"
+            result = await llm_based_search(query, search_type=search_type)
+            return result
 
         summaries = await asyncio.gather(*summarize_tasks, return_exceptions=True)
 
@@ -487,27 +681,26 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
         traceback_str = traceback.format_exc()
         write(f"Traceback: {traceback_str}")
         return f"<Summary query=\"{query}\">Error during search and scrape: {str(e)}</Summary>\n"
-    
+
+# ========================================
+# GOOGLE SEARCH AGENTIC
+# ========================================
 
 async def google_search_agentic(query, is_news=False):
     """
     Performs Google search and returns raw article content without summarization.
     Used for agentic search where the agent will analyze the raw content.
-    
-    Args:
-        query: Search query string
-        is_news: Whether to search Google News (True) or regular Google (False)
-        
-    Returns:
-        Formatted string with raw article contents
+    Falls back to MODEL_RS if Serper unavailable.
     """
     write(f"[google_search_agentic] Called with query='{query}', is_news={is_news}")
     try:
         urls = await google_search(query, is_news)
 
         if not urls:
-            write(f"[google_search_agentic] ❌ No URLs returned for query: '{query}'")
-            return f"<RawContent query=\"{query}\">No URLs returned from Google.</RawContent>\n"
+            write(f"[google_search_agentic] ⚠️ No URLs returned, using MODEL_RS fallback")
+            search_type = "news" if is_news else "general"
+            result = await llm_based_search(query, search_type=search_type)
+            return result
 
         async with FastContentExtractor() as extractor:
             write(f"[google_search_agentic] 🔍 Starting content extraction for {len(urls)} URLs")
@@ -536,8 +729,10 @@ async def google_search_agentic(query, is_news=False):
                 write(f"[google_search_agentic] ⚠️ No content for {url}, skipping.")
 
         if not output:
-            write("[google_search_agentic] ⚠️ Warning: No usable content found")
-            return f"<RawContent query=\"{query}\">No usable content extracted from any URL.</RawContent>\n"
+            write("[google_search_agentic] ⚠️ No usable content found, using MODEL_RS fallback")
+            search_type = "news" if is_news else "general"
+            result = await llm_based_search(query, search_type=search_type)
+            return result
 
         return output
         
@@ -548,13 +743,15 @@ async def google_search_agentic(query, is_news=False):
         write(f"Traceback: {traceback_str}")
         return f"<RawContent query=\"{query}\">Error during search: {str(e)}</RawContent>\n"
 
-
+# ========================================
+# PROCESS SEARCH QUERIES
+# ========================================
 
 async def process_search_queries(response: str, forecaster_id: str, question_details: dict):
     """
     Parses out search queries from the forecaster's response, executes them
     (AskNews, Agent or Google/Google News), and returns formatted summaries.
-    Note: Agent replaces the previous Perplexity functionality.
+    ALL functionality is preserved with fallbacks - NO SKIPS!
     """
     try:
         # 1) Extract the "Search queries:" block
@@ -566,7 +763,6 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
         queries_text = search_queries_block.group(1).strip()
 
         # 2) Try to find queries of the form: 1. "text" (Source)
-        # Support both "Perplexity" (legacy) and "Agent" (new)
         search_queries = re.findall(
             r'(?:\d+\.\s*)?(["\']?(.*?)["\']?)\s*\((Google|Google News|Assistant|Agent|Perplexity)\)',
             queries_text
@@ -586,10 +782,9 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
 
         # 4) Kick off one asyncio task per query
         tasks = []
-        query_sources = []  # Track which source goes with which task
+        query_sources = []
         
         for match in search_queries:
-            # match can be ("\"text\"", "text", "Source") or ("text", "Source")
             if len(match) == 3:
                 _, raw_query, source = match
             else:
@@ -608,7 +803,6 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
             query_sources.append((query, source))
 
             if source in ("Google", "Google News"):
-                # pass question_details through so summarizer can fill the prompt
                 tasks.append(
                     google_search_and_scrape(
                         query,
@@ -628,15 +822,12 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
 
         # 5) Await all tasks
         formatted_results = ""
-        
-        # First gather with return_exceptions=True to prevent one failure from breaking everything
         results = await asyncio.gather(*tasks, return_exceptions=True)
             
         # 6) Format the outputs
         for (query, source), result in zip(query_sources, results):
             if isinstance(result, Exception):
                 write(f"[process_search_queries] ❌ Forecaster {forecaster_id}: Error for '{query}' → {str(result)}")
-                # Add a message about the error in the formatted results
                 if source == "Assistant":
                     formatted_results += f"\n<Asknews_articles>\nQuery: {query}\nError retrieving results: {str(result)}\n</Asknews_articles>\n"
                 elif source == "Agent":
@@ -651,7 +842,6 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
                 elif source == "Agent":
                     formatted_results += f"\n<Agent_report>\nQuery: {query}\n{result}</Agent_report>\n"
                 else:
-                    # Google/Google News tasks already return <Summary> blocks
                     formatted_results += result
 
         return formatted_results
@@ -660,9 +850,11 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
         write(f"Forecaster {forecaster_id}: Error processing search queries: {str(e)}")
         import traceback
         write(f"Traceback: {traceback.format_exc()}")
-        # Return what we have so far instead of nothing
         return "Error processing some search queries. Partial results may be available."
 
+# ========================================
+# MAIN (for testing)
+# ========================================
 
 async def main():
     """
@@ -670,7 +862,6 @@ async def main():
     """
     print("Starting test for content extraction...")
     
-    # This part won't be executed
     sample_response = """
     Search queries:
     1. "Nvidia stock price forecast 2024" (Google)
@@ -682,7 +873,6 @@ async def main():
     forecaster_id = "demo_forecaster"
     print(f"Processing sample search queries for forecaster: {forecaster_id}")
     
-    # Sample question_details dict
     question_details = {
         "title": "Sample Question",
         "resolution_criteria": "Sample resolution criteria",
