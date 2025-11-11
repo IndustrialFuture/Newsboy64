@@ -24,6 +24,26 @@ import traceback
 load_dotenv()
 
 # ========================================
+# HELPER FUNCTIONS (must be defined first!)
+# ========================================
+
+def write(x):
+    print(x)
+
+def parse_date(date_str: str) -> str:
+    parsed_date = dateparser.parse(date_str, settings={'STRICT_PARSING': False})
+    if parsed_date:
+        return parsed_date.strftime("%b %d, %Y")
+    return "Unknown"
+
+def validate_time(before_date_str, source_date_str):
+    if source_date_str == "Unknown":
+        return False
+    before_date = dateparser.parse(before_date_str)
+    source_date = dateparser.parse(source_date_str)
+    return source_date <= before_date
+
+# ========================================
 # API KEYS AND CONFIGURATION
 # ========================================
 
@@ -71,26 +91,6 @@ write(f"  Research Model (MODEL_RS): {'✅' if HAS_RESEARCH_MODEL else '❌'}")
 
 if not HAS_RESEARCH_MODEL:
     write(f"[INIT] ⚠️ WARNING: No research model configured - fallbacks will not work properly!")
-
-# ========================================
-# HELPER FUNCTIONS
-# ========================================
-
-def write(x):
-    print(x)
-
-def parse_date(date_str: str) -> str:
-    parsed_date = dateparser.parse(date_str, settings={'STRICT_PARSING': False})
-    if parsed_date:
-        return parsed_date.strftime("%b %d, %Y")
-    return "Unknown"
-
-def validate_time(before_date_str, source_date_str):
-    if source_date_str == "Unknown":
-        return False
-    before_date = dateparser.parse(before_date_str)
-    source_date = dateparser.parse(source_date_str)
-    return source_date <= before_date
 
 # ========================================
 # FALLBACK: LLM-BASED SEARCH (when APIs missing)
