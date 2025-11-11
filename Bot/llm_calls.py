@@ -15,11 +15,37 @@ This file contains the main forecasting logic, question-type specific functions 
 def write(x):
     print(x)
 
-
-
 load_dotenv()
+
+# ========================================
+# API KEYS AND CLIENT SETUP
+# ========================================
+
 METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Create OpenAI client with OpenRouter fallback
+def get_openai_client():
+    """
+    Get OpenAI client, preferring OpenRouter if available.
+    This allows all OpenAI calls to route through OpenRouter.
+    """
+    if OPENROUTER_API_KEY:
+        write(f"[llm_calls] Using OpenRouter for OpenAI calls")
+        return OpenAI(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1"
+        )
+    elif OPENAI_API_KEY:
+        write(f"[llm_calls] Using OpenAI directly")
+        return OpenAI(api_key=OPENAI_API_KEY)
+    else:
+        raise ValueError("No OpenAI or OpenRouter API key found")
+
+# ========================================
+# CLAUDE CALLS (via Metaculus proxy)
+# ========================================
 
 async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_content=claude_context):
     url = "https://llm-proxy.metaculus.com/proxy/anthropic/v1/messages/"
@@ -118,7 +144,10 @@ async def call_claude(prompt):
     except Exception as e:
         write(f"Error in call_claude: {str(e)}")
         return f"Error generating response: {str(e)}"
-    
+
+# ========================================
+# UTILITY FUNCTIONS
+# ========================================
 
 def extract_and_run_python_code(llm_output: str) -> str:
     pattern = re.compile(r'<python>(.*?)</python>', re.DOTALL)
@@ -144,9 +173,13 @@ def extract_and_run_python_code(llm_output: str) -> str:
 
     return new_stdout.getvalue()
 
-# Calls o4-mini using personal OpenAI credentials
+# ========================================
+# GPT CALLS (via OpenRouter or OpenAI)
+# ========================================
+
+# Calls o4-mini using OpenRouter or personal OpenAI credentials
 async def call_gpt(prompt):
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = get_openai_client()
     response = client.responses.create(
         model="o4-mini",
         input= gpt_context + "\n" + prompt
@@ -154,7 +187,7 @@ async def call_gpt(prompt):
     return response.output_text
 
 async def call_gpt_o3_personal(prompt):
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = get_openai_client()
     response = client.responses.create(
         model="o3",
         input= gpt_context + "\n" + prompt
@@ -163,44 +196,59 @@ async def call_gpt_o3_personal(prompt):
 
 
 async def call_gpt_o3(prompt):
-    # Temporarily short metaculus proxy using personal credits.
+    # Use personal credits via OpenRouter/OpenAI
     ans = await call_gpt_o3_personal(prompt)
     return ans
-    try:
-        url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Token {METACULUS_TOKEN}"
-        }
-        
-        data = {
-            "model": "o3",
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        
-        timeout = ClientTimeout(total=300)  # 5 minutes total timeout
-        
-        async with ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=data) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    write(f"API error (status {response.status}): {error_text}")
-                    response.raise_for_status()
-                
-                result = await response.json()
-                
-                answer = result['choices'][0]['message']['content']
-                if answer is None:
-                    raise ValueError("No answer returned from GPT")
-                return answer
-                
-    except Exception as e:
-        write(f"Error in call_gpt: {str(e)}")
-        return f"Error generating response: {str(e)}"
+    
+    # Original Metaculus proxy code (commented out)
+    # try:
+    #     url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
+    #     headers = {
+    #         "Content-Type": "application/json",
+    #         "Authorization": f"Token {METACULUS_TOKEN}"
+    #     }
+    #     
+    #     data = {
+    #         "model": "o3",
+    #         "messages": [{"role": "user", "content": prompt}],
+    #     }
+    #     
+    #     timeout = ClientTimeout(total=300)  # 5 minutes total timeout
+    #     
+    #     async with ClientSession(timeout=timeout) as session:
+    #         async with session.post(url, headers=headers, json=data) as response:
+    #             if response.status != 200:
+    #                 error_text = await response.text()
+    #                 write(f"API error (status {response.status}): {error_text}")
+    #                 response.raise_for_status()
+    #             
+    #             result = await response.json()
+    #             
+    #             answer = result['choices'][0]['message']['content']
+    #             if answer is None:
+    #                 raise ValueError("No answer returned from GPT")
+    #             return answer
+    #             
+    # except Exception as e:
+    #     write(f"Error in call_gpt: {str(e)}")
+    #     return f"Error generating response: {str(e)}"
 
 
 async def call_gpt_o4_mini(prompt):
     prompt = gpt_context + "\n" + prompt
+    
+    # Try personal OpenRouter/OpenAI first
+    try:
+        client = get_openai_client()
+        response = client.responses.create(
+            model="o4-mini",
+            input=prompt
+        )
+        return response.output_text
+    except Exception as e:
+        write(f"[call_gpt_o4_mini] OpenRouter/OpenAI failed: {e}")
+    
+    # Fallback to Metaculus proxy if personal fails
     try:
         url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
         headers = {
@@ -230,6 +278,5 @@ async def call_gpt_o4_mini(prompt):
                 return answer
                 
     except Exception as e:
-        write(f"Error in call_gpt: {str(e)}")
+        write(f"Error in call_gpt_o4_mini (Metaculus proxy): {str(e)}")
         return f"Error generating response: {str(e)}"
-    
