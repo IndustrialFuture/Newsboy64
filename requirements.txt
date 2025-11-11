@@ -8,6 +8,7 @@ matplotlib
 numpy
 openai
 pandas
+patchright
 python-dotenv
 readability-lxml
 requests
