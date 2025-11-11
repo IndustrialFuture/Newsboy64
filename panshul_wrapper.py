@@ -63,17 +63,23 @@ def check_panshul_apis() -> Dict[str, bool]:
 def create_question_dict(qobj: dict) -> dict:
     """
     Convert our question format to Panshul's expected dictionary format.
-    Panshul's forecaster functions expect plain dicts, not class instances.
+    Panshul's bot expects specific fields like 'title', 'resolution_criteria', etc.
     """
     q_type = qobj.get("question_type", "binary").lower()
     
+    # Build the base dict with all fields Panshul expects
     base_dict = {
+        "title": qobj.get("question_text", ""),  # Panshul uses 'title' not 'question_text'
         "question_text": qobj.get("question_text", ""),
+        "resolution_criteria": qobj.get("resolution_criteria", "Standard resolution."),
+        "fine_print": qobj.get("fine_print", ""),
+        "description": qobj.get("background_info", qobj.get("description", "")),
         "id_of_post": str(qobj.get("question_id", "unknown")),
         "id_of_question": str(qobj.get("question_id", "unknown")),
         "page_url": "",
         "api_json": {},
-        "question_type": q_type
+        "question_type": q_type,
+        "resolution_date": qobj.get("horizon_utc", "")
     }
     
     if q_type == "binary":
@@ -87,6 +93,7 @@ def create_question_dict(qobj: dict) -> dict:
         qrange = qobj.get("range") or qobj.get("numeric_range") or {}
         base_dict["lower_bound"] = qrange.get("min", 0)
         base_dict["upper_bound"] = qrange.get("max", 100)
+        base_dict["units"] = qrange.get("units", "")
         return base_dict
     
     else:
