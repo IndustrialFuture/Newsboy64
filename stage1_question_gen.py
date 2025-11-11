@@ -10,6 +10,7 @@ Outputs:
 
 import os
 import json
+import re
 from typing import Tuple, Optional, Dict, List
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -201,32 +202,59 @@ def run_qg(
         )
         log(f"[QG] 📥 Received {len(response)} chars (attempt {attempt}/{max_retries})")
         
-        # Extract JSON blocks
-        blocks = extract_json_blocks(response, "QG")
-        
-        # Look for OUTPUT_A (array) and OUTPUT_B (object)
-        for raw in blocks:
+        # Try to extract OUTPUT_A using BEGIN/END tags first
+        output_a_match = re.search(
+            r'BEGIN OUTPUT_A_MINIMAL_API_ARRAY\s*\n(.*?)\n\s*END OUTPUT_A_MINIMAL_API_ARRAY',
+            response,
+            re.DOTALL
+        )
+        if output_a_match:
             try:
-                obj = json.loads(raw)
-                
-                # Check if it's an array (OUTPUT_A)
-                if isinstance(obj, list) and len(obj) > 0:
-                    # Validate it looks like questions
-                    if all(isinstance(q, dict) and "question_id" in q for q in obj):
-                        output_a = obj[:max_questions]  # Limit to max_questions
-                        log(f"[QG] ✅ Found OUTPUT_A: {len(output_a)} questions")
-                
-                # Check if it's an object (OUTPUT_B)
-                elif isinstance(obj, dict):
-                    # Look for question IDs as keys
-                    keys = list(obj.keys())
-                    if keys and any(k.startswith("Q") for k in keys):
-                        output_b = obj
-                        log(f"[QG] ✅ Found OUTPUT_B: evidence for {len(obj)} questions")
-            
+                output_a = json.loads(output_a_match.group(1).strip())
+                if isinstance(output_a, list):
+                    output_a = output_a[:max_questions]
+                    log(f"[QG] ✅ Found OUTPUT_A (via tags): {len(output_a)} questions")
             except Exception as e:
-                log(f"[QG] ⚠️ JSON parse error: {e}")
-                continue
+                log(f"[QG] ⚠️ Failed to parse OUTPUT_A from tags: {e}")
+        
+        # Try to extract OUTPUT_B using BEGIN/END tags
+        output_b_match = re.search(
+            r'BEGIN OUTPUT_B_EVIDENCE_PACKET\s*\n(.*?)\n\s*END OUTPUT_B_EVIDENCE_PACKET',
+            response,
+            re.DOTALL
+        )
+        if output_b_match:
+            try:
+                output_b = json.loads(output_b_match.group(1).strip())
+                log(f"[QG] ✅ Found OUTPUT_B (via tags): evidence for {len(output_b)} questions")
+            except Exception as e:
+                log(f"[QG] ⚠️ Failed to parse OUTPUT_B from tags: {e}")
+        
+        # If tags didn't work, fall back to JSON block extraction
+        if not output_a or not output_b:
+            blocks = extract_json_blocks(response, "QG")
+            
+            for raw in blocks:
+                try:
+                    obj = json.loads(raw)
+                    
+                    # Check if it's an array (OUTPUT_A)
+                    if isinstance(obj, list) and len(obj) > 0 and not output_a:
+                        # Validate it looks like questions
+                        if all(isinstance(q, dict) and "question_id" in q for q in obj):
+                            output_a = obj[:max_questions]
+                            log(f"[QG] ✅ Found OUTPUT_A (via blocks): {len(output_a)} questions")
+                    
+                    # Check if it's an object (OUTPUT_B)
+                    elif isinstance(obj, dict) and not output_b:
+                        # Look for question IDs as keys
+                        keys = list(obj.keys())
+                        if keys and any(k.startswith("Q") for k in keys):
+                            output_b = obj
+                            log(f"[QG] ✅ Found OUTPUT_B (via blocks): evidence for {len(obj)} questions")
+                
+                except Exception as e:
+                    continue
         
         # Success if we have both
         if output_a and output_b:
@@ -273,6 +301,9 @@ def run_stage1(topic: str, max_questions: int = 3) -> Optional[dict]:
         "output_b_evidence_packet": {...}
     } or None if failed
     """
+    # Create output directory
+    os.makedirs("out", exist_ok=True)
+    
     log_progress(f"🚀 STARTING STAGE 1: QUESTION GENERATION")
     log(f"[STAGE1] Topic: {topic}")
     log(f"[STAGE1] Max questions: {max_questions}")
