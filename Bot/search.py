@@ -320,7 +320,7 @@ async def agentic_search(query: str) -> str:
         write(f"[agentic_search] ⚠️ No LLM client available, using MODEL_RS fallback")
         return await llm_based_search(query, search_type="deep_research")
     
-    max_steps = 7
+    max_steps = 2
     current_analysis = ""
     all_search_queries = []
     
