@@ -10,8 +10,8 @@ import os
 import json
 from typing import List, Dict, Optional
 from utils import (
-    log, log_progress, save_response, call_llm,
-    extract_json_blocks, is_retryable_error,
+    log, log_progress,
+    extract_json_blocks, is_retryable_error, call_llm,
     MAX_RETRIES, RETRY_DELAYS
 )
 import time
@@ -54,6 +54,7 @@ def generate_veo_scripts(forecasts: List[dict]) -> Optional[dict]:
     user_payload = "FORECASTS:\n" + json.dumps(forecasts, indent=2)
     
     scripts = None
+    response = ""
     
     for attempt in range(1, MAX_RETRIES + 1):
         response = call_llm(
@@ -92,9 +93,18 @@ def generate_veo_scripts(forecasts: List[dict]) -> Optional[dict]:
             q_id = forecast.get("metadata", {}).get("question_id", "unknown")
             scripts[f"{q_id}_script"] = f"[STUB] Video script for {q_id} would go here."
     
-    # Save
-    save_response("veo_scripts_full.txt", response if 'response' in locals() else "")
-    save_response("veo_scripts.json", json.dumps(scripts, indent=2))
+    # Save to main out/ directory (not question-specific)
+    os.makedirs("out", exist_ok=True)
+    save_path_txt = os.path.join("out", "veo_scripts_full.txt")
+    save_path_json = os.path.join("out", "veo_scripts.json")
+    
+    with open(save_path_txt, "w") as f:
+        f.write(response if response else "")
+    log(f"[SAVED] {save_path_txt} ({len(response) if response else 0} chars)")
+    
+    with open(save_path_json, "w") as f:
+        f.write(json.dumps(scripts, indent=2))
+    log(f"[SAVED] {save_path_json} ({len(json.dumps(scripts, indent=2))} chars)")
     
     return scripts
 
