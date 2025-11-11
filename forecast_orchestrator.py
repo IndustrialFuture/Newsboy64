@@ -5,7 +5,7 @@ Forecast Pipeline - Main Orchestrator
 Runs the complete 4-stage forecasting pipeline:
   Stage 1: Question Generation (RS1→RS2→QG)
   Stage 2: Forecast Methods (Panshul + KM/BD/EX for each question)
-  Stage 3: Combiner (equal-weight for each question)
+  Stage 3: Combiner 
   Stage 4: Veo Scripts (from all forecasts)
 """
 
@@ -24,17 +24,17 @@ from stage3_combiner import run_stage3
 from stage4_veo import run_stage4
 
 # ========================================
-# 🎯 CONFIGURATION (EDIT HERE)
+# 🎯 CONFIGURATION (Read from environment with defaults)
 # ========================================
 
 # Question limits
-MAX_QUESTIONS = 3  # How many questions to run (1-3)
+MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "3"))
 
-# Stage toggles (set False to skip)
-ENABLE_STAGE1_QUESTION_GEN = True   # Skip if using USER_MODE
-ENABLE_PANSHUL_BOT = True           # Skip for faster testing
-ENABLE_METHOD_RUNNER = True         # Skip KM/BD/EX legs
-ENABLE_VEO_GENERATION = True        # Skip video generation
+# Stage toggles (read from environment, defaults to True)
+ENABLE_STAGE1_QUESTION_GEN = True   # Always true unless USER_MODE
+ENABLE_PANSHUL_BOT = os.getenv("ENABLE_PANSHUL", "true").lower() == "true"
+ENABLE_METHOD_RUNNER = os.getenv("ENABLE_METHODS", "true").lower() == "true"
+ENABLE_VEO_GENERATION = os.getenv("ENABLE_VEO", "true").lower() == "true"
 
 # User mode (provide question JSON to skip Stage 1)
 USER_MODE = bool(os.getenv("USER_QUESTION_JSON", "").strip())
@@ -50,6 +50,25 @@ VERBOSE = True
 OUTPUT_DIR = "out"
 
 # ========================================
+# LOG CONFIGURATION ON STARTUP
+# ========================================
+
+def log_configuration():
+    """Log current configuration"""
+    log("=" * 80)
+    log("🎯 CONFIGURATION")
+    log("=" * 80)
+    log(f"Mode: {'USER' if USER_MODE else 'NORMAL'}")
+    log(f"Max Questions: {MAX_QUESTIONS}")
+    log(f"Stage 1 (Question Gen): {'ENABLED' if ENABLE_STAGE1_QUESTION_GEN and not USER_MODE else 'DISABLED'}")
+    log(f"Panshul Bot: {'ENABLED' if ENABLE_PANSHUL_BOT else 'DISABLED'}")
+    log(f"Method Runner (KM/BD/EX): {'ENABLED' if ENABLE_METHOD_RUNNER else 'DISABLED'}")
+    log(f"Veo Generation: {'ENABLED' if ENABLE_VEO_GENERATION else 'DISABLED'}")
+    if not USER_MODE:
+        log(f"Topic: {TOPIC}")
+    log("=" * 80 + "\n")
+
+# ========================================
 # STATE MANAGEMENT
 # ========================================
 
@@ -63,7 +82,8 @@ def initialize_state() -> dict:
             "enable_panshul": ENABLE_PANSHUL_BOT,
             "enable_methods": ENABLE_METHOD_RUNNER,
             "enable_veo": ENABLE_VEO_GENERATION,
-            "user_mode": USER_MODE
+            "user_mode": USER_MODE,
+            "topic": TOPIC if not USER_MODE else None
         },
         "stage1": {
             "complete": False,
@@ -268,13 +288,16 @@ def run_pipeline():
     log("🚀 FORECAST PIPELINE - STARTING")
     log("=" * 80)
     
+    # Log configuration
+    log_configuration()
+    
     # Initialize state
     state = initialize_state()
     
     # Try to load existing state (for resume capability)
     existing_state = load_state(OUTPUT_DIR)
     if existing_state:
-        log("[RESUME] Found existing state - resuming from stage " + existing_state.get("stage", "0"))
+        log_progress(f"📂 RESUME MODE: Found existing state from stage {existing_state.get('stage', '0')}")
         state = existing_state
     
     # USER MODE: Single question
