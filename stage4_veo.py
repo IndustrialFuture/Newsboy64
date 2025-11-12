@@ -1,59 +1,52 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Forecast Pipeline - Stage 4: Veo Script Generation (STUB)
-Generates video scripts from forecasts.
-Veo API integration will be added in Phase 2.
+Forecast Pipeline - Stage 4: Veo Script Generation
+Generates video scripts from forecasts using PROMPT_REPORTER.
 """
 
 import os
 import json
-from typing import List, Dict, Optional
+import time
+from typing import Dict, List, Optional
 from utils import (
-    log, log_progress,
-    extract_json_blocks, is_retryable_error, call_llm,
+    log, log_progress, save_response, call_llm,
+    extract_json_blocks, is_retryable_error,
     MAX_RETRIES, RETRY_DELAYS
 )
-import time
 
 # Get model and prompt from environment
-MODEL_VEO = os.getenv("MODEL_FC", "").strip()  # Use forecast model for now
+MODEL_VEO = os.getenv("MODEL_FC", "").strip()  # Use forecast model for Veo
 PROMPT_REPORTER = os.getenv("PROMPT_REPORTER", "").strip()
 
 # ========================================
-# GENERATE VEO SCRIPTS
+# GENERATE VEO SCRIPT FOR A FORECAST
 # ========================================
 
-def generate_veo_scripts(forecasts: List[dict]) -> Optional[dict]:
+def generate_veo_script(forecast: dict) -> Optional[dict]:
     """
-    Generate Veo video scripts from forecasts.
+    Generate a Veo video script from a forecast.
     
-    Input: List of final forecast objects
-    Output: {"Q1_script": "...", "Q2_script": "...", "Q3_script": "..."}
+    Input:
+    - forecast: Final combined forecast with metadata
+    
+    Returns: Veo script JSON or None if failed
     """
     if not PROMPT_REPORTER:
         log("[VEO] ⏭️ SKIPPED (PROMPT_REPORTER not configured)")
-        # Create stub scripts
-        stub_scripts = {}
-        for forecast in forecasts:
-            q_id = forecast.get("metadata", {}).get("question_id", "unknown")
-            stub_scripts[f"{q_id}_script"] = f"[STUB] Video script for {q_id} would go here."
-        return stub_scripts
-    
-    log_progress("🎬 GENERATING VEO SCRIPTS")
+        return None
     
     if not MODEL_VEO:
-        log("[VEO] ⚠️ MODEL_FC not set, using stub mode")
-        stub_scripts = {}
-        for forecast in forecasts:
-            q_id = forecast.get("metadata", {}).get("question_id", "unknown")
-            stub_scripts[f"{q_id}_script"] = f"[STUB] Video script for {q_id} would go here."
-        return stub_scripts
+        log("[VEO] ⏭️ SKIPPED (MODEL_FC not configured)")
+        return None
     
-    # Build prompt payload
-    user_payload = "FORECASTS:\n" + json.dumps(forecasts, indent=2)
+    q_id = forecast.get("metadata", {}).get("question_id", "unknown")
+    log(f"[VEO] Generating script for Q {q_id}")
     
-    scripts = None
+    # Build user payload
+    user_payload = json.dumps(forecast, indent=2)
+    
+    script = None
     response = ""
     
     for attempt in range(1, MAX_RETRIES + 1):
@@ -70,10 +63,11 @@ def generate_veo_scripts(forecasts: List[dict]) -> Optional[dict]:
         blocks = extract_json_blocks(response, "VEO")
         
         if blocks:
+            # Take the longest block
             block = max(blocks, key=len)
             try:
-                scripts = json.loads(block)
-                log(f"[VEO] ✅ Valid scripts extracted ({len(block)} chars)")
+                script = json.loads(block)
+                log(f"[VEO] ✅ Valid script extracted ({len(block)} chars)")
                 break
             except Exception as e:
                 log(f"[VEO] ⚠️ JSON parse error: {e}")
@@ -85,80 +79,55 @@ def generate_veo_scripts(forecasts: List[dict]) -> Optional[dict]:
             time.sleep(delay)
             continue
     
-    if scripts is None:
-        log(f"[VEO] ❌ FAILED after {MAX_RETRIES} attempts - using stub")
-        # Fallback to stub
-        scripts = {}
-        for forecast in forecasts:
-            q_id = forecast.get("metadata", {}).get("question_id", "unknown")
-            scripts[f"{q_id}_script"] = f"[STUB] Video script for {q_id} would go here."
+    if script is None:
+        log(f"[VEO] ❌ FAILED after {MAX_RETRIES} attempts")
+        save_response(f"veo_script_{q_id}_full.txt", response)
+        return None
     
-    # Save to main out/ directory (not question-specific)
-    os.makedirs("out", exist_ok=True)
-    save_path_txt = os.path.join("out", "veo_scripts_full.txt")
-    save_path_json = os.path.join("out", "veo_scripts.json")
+    # Save script
+    save_response(f"veo_script_{q_id}.json", json.dumps(script, indent=2))
+    save_response(f"veo_script_{q_id}_full.txt", response)
     
-    with open(save_path_txt, "w") as f:
-        f.write(response if response else "")
-    log(f"[SAVED] {save_path_txt} ({len(response) if response else 0} chars)")
-    
-    with open(save_path_json, "w") as f:
-        f.write(json.dumps(scripts, indent=2))
-    log(f"[SAVED] {save_path_json} ({len(json.dumps(scripts, indent=2))} chars)")
-    
-    return scripts
+    return script
 
 # ========================================
-# RUN STAGE 4
+# RUN VEO GENERATION FOR ALL FORECASTS
 # ========================================
 
-def run_stage4(forecasts: List[dict]) -> Optional[dict]:
+def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, dict]]:
     """
-    Run Stage 4: Generate Veo scripts from all forecasts.
+    Run Stage 4: Generate Veo scripts for all forecasts.
     
-    Input: List of final forecast objects [forecast1, forecast2, forecast3]
-    Output: {"Q1_script": "...", "Q2_script": "...", "Q3_script": "..."}
+    Input:
+    - forecasts: List of final combined forecasts
+    
+    Returns: Dict mapping question IDs to Veo scripts, or None if failed
     """
     log_progress("🎬 STARTING STAGE 4: VEO SCRIPT GENERATION")
     
-    scripts = generate_veo_scripts(forecasts)
+    if not PROMPT_REPORTER:
+        log("[VEO] ⏭️ SKIPPED (PROMPT_REPORTER not configured)")
+        return {"skipped": "PROMPT_REPORTER not configured"}
     
-    if scripts:
-        log_progress(f"✅ STAGE 4 COMPLETE: Generated {len(scripts)} scripts")
-    else:
-        log("[STAGE4] ⚠️ No scripts generated")
+    if not forecasts:
+        log("[VEO] ⚠️ No forecasts provided")
+        return None
     
-    return scripts
-
-# ========================================
-# STUB: VEO API INTEGRATION (Phase 2)
-# ========================================
-
-def call_veo_api(script: str) -> Optional[str]:
-    """
-    STUB: Call Veo API to generate video from script.
+    scripts = {}
     
-    This will be implemented in Phase 2.
-    For now, just returns a placeholder.
-    """
-    log("[VEO API] 🚧 STUB - Veo API integration not yet implemented")
-    return None
-
-def generate_videos(scripts: dict) -> Dict[str, str]:
-    """
-    STUB: Generate videos from scripts using Veo API.
+    for forecast in forecasts:
+        q_id = forecast.get("metadata", {}).get("question_id", "unknown")
+        
+        script = generate_veo_script(forecast)
+        
+        if script:
+            scripts[q_id] = script
+        else:
+            log(f"[VEO] ⚠️ Failed to generate script for Q {q_id}")
     
-    This will be implemented in Phase 2.
-    For now, just returns placeholders.
-    """
-    log("[VEO API] 🚧 STUB - Video generation not yet implemented")
+    log_progress(f"✅ STAGE 4 COMPLETE: {len(scripts)} scripts generated")
     
-    videos = {}
-    for script_id, script_text in scripts.items():
-        video_id = script_id.replace("_script", "_video")
-        videos[video_id] = "[PLACEHOLDER] Video would be generated here"
-    
-    return videos
+    return scripts if scripts else None
 
 # ========================================
 # END OF STAGE4_VEO
