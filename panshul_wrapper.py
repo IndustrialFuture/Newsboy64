@@ -18,7 +18,7 @@ from utils import log
 
 # Try to import bot modules
 try:
-    from Bot.main import forecast  # ✅ CHANGED FROM Bot.run to Bot.main
+    from Bot.forecaster import forecast  # ✅ CHANGED FROM Bot.run to Bot.main
     from Bot.search import write
     log("[PANSHUL] ✅ Bot modules imported successfully")
 except ImportError as e:
