@@ -10,7 +10,7 @@ import io
 from dotenv import load_dotenv
 from prompts import claude_context, gpt_context
 """
-This file contains the main forecasting logic, question-type specific functions are abstracted.
+LLM calls centralized - routes through OpenRouter with Metaculus proxy fallback.
 """
 def write(x):
     print(x)
@@ -25,10 +25,10 @@ METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Create OpenAI client with OpenRouter fallback
+# Create OpenAI client with OpenRouter
 def get_openai_client():
     """
-    Get OpenAI client, preferring OpenRouter if available.
+    Get OpenAI client, using OpenRouter if available.
     This allows all OpenAI calls to route through OpenRouter.
     """
     if OPENROUTER_API_KEY:
@@ -49,7 +49,7 @@ def get_openai_client():
 
 async def call_claude_via_openrouter(prompt):
     """
-    Call Claude via OpenRouter instead of Metaculus proxy.
+    Call Claude via OpenRouter.
     """
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY not set")
@@ -62,7 +62,7 @@ async def call_claude_via_openrouter(prompt):
         )
         
         response = client.chat.completions.create(
-            model="anthropic/claude-3.5-sonnet",  # FIXED: Valid OpenRouter model ID
+            model="anthropic/claude-3.5-sonnet",
             messages=[
                 {"role": "system", "content": claude_context},
                 {"role": "user", "content": prompt}
@@ -79,7 +79,11 @@ async def call_claude_via_openrouter(prompt):
 async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_content=claude_context):
     """
     Call Claude via Metaculus proxy (requires METACULUS_TOKEN).
+    Used as fallback when OpenRouter unavailable.
     """
+    if not METACULUS_TOKEN:
+        raise ValueError("METACULUS_TOKEN not set - cannot use Metaculus proxy fallback")
+    
     url = "https://llm-proxy.metaculus.com/proxy/anthropic/v1/messages/"
     headers = {
         "Authorization": f"Token {METACULUS_TOKEN}",
@@ -117,17 +121,17 @@ async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_con
         backoff_delay = min(2 ** attempt, 60)
         
         try:
-            write(f"Starting API call attempt {attempt + 1}")
-            timeout = ClientTimeout(total=300)  # 5 minutes total timeout
+            write(f"[Metaculus proxy] Starting API call attempt {attempt + 1}")
+            timeout = ClientTimeout(total=300)
             
             async with ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=data) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        write(f"API error (status {response.status}): {error_text}")
+                        write(f"[Metaculus proxy] API error (status {response.status}): {error_text}")
                         
-                        if response.status in [429, 503]:  # Rate limit or service unavailable
-                            write(f"Retryable error. Waiting {backoff_delay} seconds...")
+                        if response.status in [429, 503]:
+                            write(f"[Metaculus proxy] Retryable error. Waiting {backoff_delay} seconds...")
                             await asyncio.sleep(backoff_delay)
                             continue
                             
@@ -142,48 +146,46 @@ async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_con
                         if block.get("type") == "thinking":
                             thinking = block.get("thinking")
                     
-                    print(f"Claude's thinking: {thinking}")
+                    if thinking:
+                        print(f"[Metaculus proxy] Claude's thinking: {thinking[:200]}...")
                     return text
-                    
-                    write("No 'text' block found in content.")
-                    return "No final answer found in Claude response."
                         
         except (ClientError, asyncio.TimeoutError) as e:
-            write(f"Retryable error on attempt {attempt + 1}: {str(e)}")
+            write(f"[Metaculus proxy] Retryable error on attempt {attempt + 1}: {str(e)}")
             if attempt == max_retries - 1:
                 raise
             await asyncio.sleep(backoff_delay)
             
         except Exception as e:
-            write(f"Unexpected error on attempt {attempt + 1}: {str(e)}")
+            write(f"[Metaculus proxy] Unexpected error on attempt {attempt + 1}: {str(e)}")
             if attempt == max_retries - 1:
                 raise
             await asyncio.sleep(backoff_delay)
 
-    raise Exception(f"Failed after {max_retries} attempts")
+    raise Exception(f"[Metaculus proxy] Failed after {max_retries} attempts")
 
 
 async def call_claude(prompt):
     """
-    Call Claude - use OpenRouter if available, otherwise Metaculus proxy.
+    Call Claude - use OpenRouter if available, otherwise Metaculus proxy fallback.
     """
     if OPENROUTER_API_KEY:
-        write("[call_claude] Using OpenRouter")
-        return await call_claude_via_openrouter(prompt)
-    else:
-        write("[call_claude] Using Metaculus proxy (requires METACULUS_TOKEN)")
         try:
-            response = await call_anthropic_api(prompt)
-            
-            if not response:
-                write("Warning: Empty response from Anthropic API")
-                return "API returned empty response"
-                
-            return response
-            
+            write("[call_claude] Using OpenRouter")
+            return await call_claude_via_openrouter(prompt)
         except Exception as e:
-            write(f"Error in call_claude: {str(e)}")
-            return f"Error generating response: {str(e)}"
+            write(f"[call_claude] OpenRouter failed: {e}")
+            if METACULUS_TOKEN:
+                write("[call_claude] Falling back to Metaculus proxy")
+                return await call_anthropic_api(prompt)
+            else:
+                write("[call_claude] No Metaculus token available for fallback")
+                raise
+    else:
+        write("[call_claude] Using Metaculus proxy (no OpenRouter key)")
+        if not METACULUS_TOKEN:
+            raise ValueError("Neither OPENROUTER_API_KEY nor METACULUS_TOKEN set")
+        return await call_anthropic_api(prompt)
 
 # ========================================
 # UTILITY FUNCTIONS
@@ -203,7 +205,7 @@ def extract_and_run_python_code(llm_output: str) -> str:
     sys.stdout = new_stdout
 
     try:
-        exec(python_code, {})  # use isolated globals
+        exec(python_code, {})
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -217,73 +219,126 @@ def extract_and_run_python_code(llm_output: str) -> str:
 # GPT CALLS (via OpenRouter or OpenAI)
 # ========================================
 
-# Calls o4-mini using OpenRouter or personal OpenAI credentials
 async def call_gpt(prompt):
+    """Call o4-mini via OpenRouter/OpenAI"""
     client = get_openai_client()
     response = client.responses.create(
-        model="o4-mini",
+        model="openai/o4-mini",
         input= gpt_context + "\n" + prompt
     )
     return response.output_text
 
 async def call_gpt_o3_personal(prompt):
+    """Call o3 via OpenRouter/OpenAI"""
     client = get_openai_client()
     response = client.responses.create(
-        model="o3",
+        model="openai/o3-mini",  # ← When ready hange this to model="openai/o3",
         input= gpt_context + "\n" + prompt
     )
     return response.output_text
 
 
 async def call_gpt_o3(prompt):
-    # Use personal credits via OpenRouter/OpenAI
-    ans = await call_gpt_o3_personal(prompt)
-    return ans
+    """
+    Call o3 - use personal OpenRouter/OpenAI, with Metaculus proxy fallback
+    """
+    try:
+        ans = await call_gpt_o3_personal(prompt)
+        return ans
+    except Exception as e:
+        write(f"[call_gpt_o3] OpenRouter/OpenAI failed: {e}")
+        if METACULUS_TOKEN:
+            write("[call_gpt_o3] Falling back to Metaculus proxy")
+            return await call_gpt_o3_metaculus(prompt)
+        else:
+            write("[call_gpt_o3] No Metaculus token available for fallback")
+            raise
+
+async def call_gpt_o3_metaculus(prompt):
+    """Metaculus proxy fallback for o3"""
+    if not METACULUS_TOKEN:
+        raise ValueError("METACULUS_TOKEN not set - cannot use Metaculus proxy fallback")
+    
+    prompt = gpt_context + "\n" + prompt
+    
+    url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Token {METACULUS_TOKEN}"
+    }
+    
+    data = {
+        "model": "o3",
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    
+    timeout = ClientTimeout(total=300)
+    
+    async with ClientSession(timeout=timeout) as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                write(f"[Metaculus proxy o3] API error (status {response.status}): {error_text}")
+                response.raise_for_status()
+            
+            result = await response.json()
+            
+            answer = result['choices'][0]['message']['content']
+            if answer is None:
+                raise ValueError("No answer returned from GPT")
+            return answer
 
 
 async def call_gpt_o4_mini(prompt):
+    """
+    Call o4-mini - use personal OpenRouter/OpenAI, with Metaculus proxy fallback
+    """
     prompt = gpt_context + "\n" + prompt
     
-    # Try personal OpenRouter/OpenAI first
     try:
         client = get_openai_client()
         response = client.responses.create(
-            model="o4-mini",
+            model="openai/o4-mini",
             input=prompt
         )
         return response.output_text
     except Exception as e:
         write(f"[call_gpt_o4_mini] OpenRouter/OpenAI failed: {e}")
+        if METACULUS_TOKEN:
+            write("[call_gpt_o4_mini] Falling back to Metaculus proxy")
+            return await call_gpt_o4_mini_metaculus(prompt)
+        else:
+            write("[call_gpt_o4_mini] No Metaculus token available for fallback")
+            raise
+
+async def call_gpt_o4_mini_metaculus(prompt):
+    """Metaculus proxy fallback for o4-mini"""
+    if not METACULUS_TOKEN:
+        raise ValueError("METACULUS_TOKEN not set - cannot use Metaculus proxy fallback")
     
-    # Fallback to Metaculus proxy if personal fails
-    try:
-        url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Token {METACULUS_TOKEN}"
-        }
-        
-        data = {
-            "model": "o4-mini",
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        
-        timeout = ClientTimeout(total=300)  # 5 minutes total timeout
-        
-        async with ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=data) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    write(f"API error (status {response.status}): {error_text}")
-                    response.raise_for_status()
-                
-                result = await response.json()
-                
-                answer = result['choices'][0]['message']['content']
-                if answer is None:
-                    raise ValueError("No answer returned from GPT")
-                return answer
-                
-    except Exception as e:
-        write(f"Error in call_gpt_o4_mini (Metaculus proxy): {str(e)}")
-        return f"Error generating response: {str(e)}"
+    url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Token {METACULUS_TOKEN}"
+    }
+    
+    data = {
+        "model": "o4-mini",
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    
+    timeout = ClientTimeout(total=300)
+    
+    async with ClientSession(timeout=timeout) as session:
+        async with session.post(url, headers=headers, json=data) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                write(f"[Metaculus proxy o4-mini] API error (status {response.status}): {error_text}")
+                response.raise_for_status()
+            
+            result = await response.json()
+            
+            answer = result['choices'][0]['message']['content']
+            if answer is None:
+                raise ValueError("No answer returned from GPT")
+            return answer
