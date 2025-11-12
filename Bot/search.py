@@ -21,6 +21,7 @@ import random
 import time
 from openai import OpenAI   
 import traceback
+from datetime import datetime, timezone
 load_dotenv()
 
 # ========================================
@@ -31,17 +32,37 @@ def write(x):
     print(x)
 
 def parse_date(date_str: str) -> str:
+    """Parse date string and return formatted date."""
     parsed_date = dateparser.parse(date_str, settings={'STRICT_PARSING': False})
     if parsed_date:
         return parsed_date.strftime("%b %d, %Y")
     return "Unknown"
 
 def validate_time(before_date_str, source_date_str):
+    """
+    Validate that source date is before the cutoff date.
+    Handles timezone-aware and timezone-naive datetimes.
+    """
     if source_date_str == "Unknown":
         return False
-    before_date = dateparser.parse(before_date_str)
-    source_date = dateparser.parse(source_date_str)
-    return source_date <= before_date
+    
+    try:
+        before_date = dateparser.parse(before_date_str)
+        source_date = dateparser.parse(source_date_str)
+        
+        if before_date is None or source_date is None:
+            return False
+        
+        # Make both timezone-aware if either is timezone-aware
+        if before_date.tzinfo is not None and source_date.tzinfo is None:
+            source_date = source_date.replace(tzinfo=timezone.utc)
+        elif before_date.tzinfo is None and source_date.tzinfo is not None:
+            before_date = before_date.replace(tzinfo=timezone.utc)
+        
+        return source_date <= before_date
+    except Exception as e:
+        write(f"[validate_time] Error comparing dates: {e}")
+        return False
 
 # ========================================
 # API KEYS AND CONFIGURATION
@@ -569,7 +590,7 @@ async def google_search(query, is_news=False, date_before=None):
                             break
                     
                     urls = [item['link'] for item in filtered_items]
-                    write(f"[google_search] Returning {len(urls)} URLs: {urls}")
+                    write(f"[google_search] Returning {len(urls)} URLs")
                     return urls
                 else:
                     write(f"[google_search] Error in Serper API response: Status {response.status}")
