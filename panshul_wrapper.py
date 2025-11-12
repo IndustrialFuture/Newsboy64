@@ -90,16 +90,27 @@ def convert_to_panshul_format(qobj: dict) -> dict:
     """
     Convert our question format to Panshul's expected format (Metaculus API format).
     
-    The bot expects the same format as Metaculus API returns.
+    Handles both formats:
+    - Metaculus format: question_text, horizon_utc, options
+    - Standard format: title, resolution_date, description, resolution_criteria
     """
+    # Get question text - try question_text first, then title
+    question_text = qobj.get("question_text", qobj.get("title", ""))
+    
+    # Get description - if not provided, use question_text as fallback
+    description = qobj.get("description", "")
+    if not description and question_text:
+        description = question_text
+    
     return {
         "id": qobj.get("question_id", "unknown"),
         "type": qobj.get("question_type", "binary"),
-        "title": qobj.get("title", ""),
+        "title": question_text,
         "resolution_criteria": qobj.get("resolution_criteria", ""),
-        "description": qobj.get("description", ""),  # Bot expects 'description', not 'background'
+        "description": description,
         "fine_print": qobj.get("fine_print", ""),
-        "resolution_date": qobj.get("resolution_date", "")
+        "resolution_date": qobj.get("horizon_utc", qobj.get("resolution_date", "")),
+        "options": qobj.get("options", [])  # CRITICAL: Multiple choice needs options!
     }
 
 # ========================================
