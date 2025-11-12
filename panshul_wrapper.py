@@ -41,7 +41,7 @@ else:
     log("[PANSHUL] Full mode: ~54 calls, 5 forecasters, includes agentic search")
 
 # ========================================
-# API AVAILABILITY CHECK (FIXED)
+# API AVAILABILITY CHECK
 # ========================================
 
 def check_api_availability():
@@ -88,14 +88,16 @@ def check_api_availability():
 
 def convert_to_panshul_format(qobj: dict) -> dict:
     """
-    Convert our question format to Panshul's expected format.
+    Convert our question format to Panshul's expected format (Metaculus API format).
+    
+    The bot expects the same format as Metaculus API returns.
     """
     return {
         "id": qobj.get("question_id", "unknown"),
         "type": qobj.get("question_type", "binary"),
         "title": qobj.get("title", ""),
         "resolution_criteria": qobj.get("resolution_criteria", ""),
-        "background": qobj.get("description", ""),
+        "description": qobj.get("description", ""),  # Bot expects 'description', not 'background'
         "fine_print": qobj.get("fine_print", ""),
         "resolution_date": qobj.get("resolution_date", "")
     }
