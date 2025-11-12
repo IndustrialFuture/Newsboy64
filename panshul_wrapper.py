@@ -12,26 +12,18 @@ from typing import Dict, Optional
 import asyncio
 
 # Add Bot directory to path
-bot_dir = os.path.join(os.path.dirname(__file__), 'Bot')
-sys.path.insert(0, bot_dir)
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Bot'))
 
 from utils import log
 
-# Try to import bot modules based on question type
+# Try to import bot modules
 try:
-    # Import the forecaster functions from each type
-    from binary_fast import forecast as forecast_binary_fast
-    from binary import forecast as forecast_binary_full
-    from multiple_choice_fast import forecast as forecast_mc_fast
-    from multiple_choice import forecast as forecast_mc_full
-    from numeric_fast import forecast as forecast_numeric_fast
-    from numeric import forecast as forecast_numeric_full
+    from Bot.run import forecast
+    from Bot.search import write
     log("[PANSHUL] ✅ Bot modules imported successfully")
-    BOT_AVAILABLE = True
 except ImportError as e:
     log(f"[PANSHUL] ❌ Failed to import bot modules: {e}")
-    log(f"[PANSHUL] Bot directory: {bot_dir}")
-    BOT_AVAILABLE = False
+    forecast = None
 
 # ========================================
 # CONFIGURATION
@@ -48,7 +40,7 @@ else:
     log("[PANSHUL] Full mode: ~54 calls, 5 forecasters, includes agentic search")
 
 # ========================================
-# API AVAILABILITY CHECK
+# API AVAILABILITY CHECK (FIXED)
 # ========================================
 
 def check_api_availability():
@@ -130,34 +122,6 @@ def convert_to_panshul_format(qobj: dict) -> dict:
     }
 
 # ========================================
-# FORECAST ROUTER
-# ========================================
-
-def get_forecast_function(question_type: str, mode: str):
-    """
-    Get the appropriate forecast function based on question type and mode.
-    
-    Args:
-        question_type: "binary", "multiple_choice", or "numeric"
-        mode: "fast" or "full"
-    
-    Returns:
-        The appropriate forecast function, or None if not available
-    """
-    if not BOT_AVAILABLE:
-        return None
-    
-    if question_type == "binary":
-        return forecast_binary_fast if mode == "fast" else forecast_binary_full
-    elif question_type == "multiple_choice":
-        return forecast_mc_fast if mode == "fast" else forecast_mc_full
-    elif question_type == "numeric":
-        return forecast_numeric_fast if mode == "fast" else forecast_numeric_full
-    else:
-        log(f"[PANSHUL] ⚠️ Unknown question type: {question_type}")
-        return None
-
-# ========================================
 # MAIN RUNNER
 # ========================================
 
@@ -176,7 +140,7 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
     log("=" * 60)
     
     # Check if bot is available
-    if not BOT_AVAILABLE:
+    if forecast is None:
         log("[PANSHUL] ❌ Bot not available (import failed)")
         return None
     
@@ -191,16 +155,9 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
     
     log(f"[PANSHUL] Running forecast for Q {q_id} (type: {q_type}, mode: {PANSHUL_MODE})")
     
-    # Get the appropriate forecast function
-    forecast_func = get_forecast_function(q_type, PANSHUL_MODE)
-    
-    if forecast_func is None:
-        log(f"[PANSHUL] ❌ No forecast function available for type '{q_type}' in mode '{PANSHUL_MODE}'")
-        return None
-    
     try:
-        # Run the bot
-        result = asyncio.run(forecast_func(panshul_question))
+        # Run the bot with mode parameter
+        result = asyncio.run(forecast(panshul_question, mode=PANSHUL_MODE))
         
         if result is None:
             log(f"[PANSHUL] ❌ Bot returned None for Q {q_id}")
