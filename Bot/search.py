@@ -602,7 +602,7 @@ async def call_gpt(prompt, step=1):
     try:
         # Use o3 (full, not mini) as per original
         response = client.responses.create(
-            model="openai/o3",
+            model="openai/o3-mini",  # ← CHANGE THIS back to model="openai/o3" when ready!
             input=prompt
         )
         return response.output_text
