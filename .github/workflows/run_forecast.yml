@@ -70,7 +70,8 @@ jobs:
       - name: Determine Mode
         id: mode
         run: |
-          if [ -n "${{ github.event.inputs.user_question }}" ]; then
+          USER_Q='${{ github.event.inputs.user_question }}'
+          if [ -n "$USER_Q" ]; then
             echo "mode=user" >> $GITHUB_OUTPUT
             echo "🎯 Running in USER MODE (custom question provided)"
           else
