@@ -35,17 +35,17 @@ PANSHUL_MODE = os.getenv("PANSHUL_MODE", "full").lower()
 
 if PANSHUL_MODE == "fast":
     log("[PANSHUL] Mode: FAST")
-    log("[PANSHUL] Fast mode: ~27 calls, 5 forecasters, skips Agent/Perplexity")
+    log("[PANSHUL] Fast mode: ~27 calls, 2 forecasters (Claude + o3), skips Agent/Perplexity")
 else:
     log("[PANSHUL] Mode: FULL")
-    log("[PANSHUL] Full mode: ~54 calls, 5 forecasters, includes agentic search")
+    log("[PANSHUL] Full mode: ~54 calls, 5 forecasters (2 Claude + 1 o4-mini + 2 o3), includes agentic search")
 
 # ========================================
 # API AVAILABILITY CHECK
 # ========================================
 
 def check_api_availability():
-    """Check which APIs are available - matches Bot/search.py format"""
+    """Check which APIs are available"""
     HAS_OPENROUTER = bool(os.getenv("OPENROUTER_API_KEY"))
     HAS_SERPER = bool(os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY"))
     HAS_ASKNEWS = bool(os.getenv("ASKNEWS_CLIENT_ID") and os.getenv("ASKNEWS_SECRET"))
@@ -55,7 +55,7 @@ def check_api_availability():
     
     log("[PANSHUL] API availability check:")
     log(f"  OpenRouter: {'✅' if HAS_OPENROUTER else '❌'}")
-    log(f"  Serper (Google Search): {'✅' if HAS_SERPER else '❌ → Will use MODEL_RS fallback'}")
+    log(f"  Serper (Google Search): {'✅' if HAS_SERPER else '❌'}")
     
     # News API hierarchy display
     if HAS_ASKNEWS:
@@ -63,13 +63,15 @@ def check_api_availability():
     elif HAS_NEWSAPI:
         log(f"  AskNews: ❌ → Using NewsAPI instead")
     else:
-        log(f"  AskNews: ❌ → Using MODEL_RS fallback")
+        log(f"  AskNews: ❌ → No news APIs available")
     
     if HAS_NEWSAPI:
         log(f"  NewsAPI: ✅")
     
     if HAS_PERPLEXITY:
         log(f"  Perplexity: ✅")
+    else:
+        log(f"  Perplexity: ❌ → Will use agentic search fallback")
     
     log(f"  Gemini: {'✅' if HAS_GEMINI else '❌'}")
     
@@ -88,7 +90,7 @@ def check_api_availability():
 
 def convert_to_panshul_format(qobj: dict) -> dict:
     """
-    Convert our question format to Panshul's expected format (Metaculus API format).
+    Convert our question format to Panshul's expected format.
     
     Handles both formats:
     - Metaculus format: question_text, horizon_utc, options
@@ -110,7 +112,7 @@ def convert_to_panshul_format(qobj: dict) -> dict:
         "description": description,
         "fine_print": qobj.get("fine_print", ""),
         "resolution_date": qobj.get("horizon_utc", qobj.get("resolution_date", "")),
-        "options": qobj.get("options", [])  # CRITICAL: Multiple choice needs options!
+        "options": qobj.get("options", [])
     }
 
 # ========================================
@@ -125,7 +127,7 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
         qobj: Question object in our standard format
     
     Returns:
-        Dictionary containing forecast results, or None if failed
+        Dictionary containing forecast results wrapped in PANSHUL_RESULTS, or None if failed
     """
     log("=" * 60)
     log("🤖 RUNNING PANSHUL BOT")
@@ -168,13 +170,20 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
         # The bot returns (forecast, comment) tuple
         if isinstance(result, tuple) and len(result) == 2:
             forecast, comment = result
+            # CRITICAL FIX: Wrap in PANSHUL_RESULTS so combiner can find it
             return {
-                "forecast": forecast,
-                "comment": comment
+                "PANSHUL_RESULTS": {
+                    "forecast": forecast,
+                    "comment": comment
+                }
             }
         else:
             log(f"[PANSHUL] ⚠️ Unexpected result format: {type(result)}")
-            return {"forecast": result}
+            return {
+                "PANSHUL_RESULTS": {
+                    "forecast": result
+                }
+            }
     
     except Exception as e:
         log(f"[PANSHUL] ❌ Exception running bot: {e}")
