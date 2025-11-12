@@ -3,22 +3,14 @@ name: Forecast Pipeline
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Run mode (normal or user)'
+      user_question:
+        description: 'User question JSON (leave blank for normal mode - will generate 3 questions)'
         required: false
-        default: 'normal'
-        type: choice
-        options:
-          - normal
-          - user
+        default: ''
       topic:
         description: 'Topic for question generation (normal mode only)'
         required: false
         default: 'Current events and trends'
-      user_question:
-        description: 'User question JSON (user mode only)'
-        required: false
-        default: ''
       max_questions:
         description: 'Maximum number of questions to process'
         required: false
