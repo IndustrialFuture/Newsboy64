@@ -30,15 +30,21 @@ from stage4_veo import run_stage4
 # Question limits
 MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "3"))
 
+# Mode detection (explicit MODE from workflow, or auto-detect from USER_QUESTION_JSON)
+MODE = os.getenv("MODE", "normal").lower()
+USER_QUESTION_JSON = os.getenv("USER_QUESTION_JSON", "").strip()
+
+# Determine if we're in user mode
+if MODE == "user" or (MODE == "normal" and USER_QUESTION_JSON):
+    USER_MODE = True
+else:
+    USER_MODE = False
+
 # Stage toggles (read from environment, defaults to True)
-ENABLE_STAGE1_QUESTION_GEN = True   # Always true unless USER_MODE
+ENABLE_STAGE1_QUESTION_GEN = not USER_MODE  # Disabled in user mode
 ENABLE_PANSHUL_BOT = os.getenv("ENABLE_PANSHUL", "true").lower() == "true"
 ENABLE_METHOD_RUNNER = os.getenv("ENABLE_METHODS", "true").lower() == "true"
 ENABLE_VEO_GENERATION = os.getenv("ENABLE_VEO", "true").lower() == "true"
-
-# User mode (provide question JSON to skip Stage 1)
-USER_MODE = bool(os.getenv("USER_QUESTION_JSON", "").strip())
-USER_QUESTION_JSON = os.getenv("USER_QUESTION_JSON", "").strip()
 
 # Topic for Stage 1 (if not in user mode)
 TOPIC = os.getenv("TOPIC", "").strip() or "Current events and trends"
@@ -60,12 +66,14 @@ def log_configuration():
     log("=" * 80)
     log(f"Mode: {'USER' if USER_MODE else 'NORMAL'}")
     log(f"Max Questions: {MAX_QUESTIONS}")
-    log(f"Stage 1 (Question Gen): {'ENABLED' if ENABLE_STAGE1_QUESTION_GEN and not USER_MODE else 'DISABLED'}")
+    log(f"Stage 1 (Question Gen): {'ENABLED' if ENABLE_STAGE1_QUESTION_GEN else 'DISABLED (User Mode)'}")
     log(f"Panshul Bot: {'ENABLED' if ENABLE_PANSHUL_BOT else 'DISABLED'}")
     log(f"Method Runner (KM/BD/EX): {'ENABLED' if ENABLE_METHOD_RUNNER else 'DISABLED'}")
     log(f"Veo Generation: {'ENABLED' if ENABLE_VEO_GENERATION else 'DISABLED'}")
     if not USER_MODE:
         log(f"Topic: {TOPIC}")
+    else:
+        log(f"User Question: {USER_QUESTION_JSON[:100]}..." if len(USER_QUESTION_JSON) > 100 else USER_QUESTION_JSON)
     log("=" * 80 + "\n")
 
 # ========================================
@@ -105,7 +113,7 @@ def initialize_state() -> dict:
 def run_stage1_pipeline(state: dict) -> bool:
     """Run Stage 1: Question Generation"""
     if not ENABLE_STAGE1_QUESTION_GEN:
-        log("[STAGE1] ⏭️ SKIPPED (disabled in config)")
+        log("[STAGE1] ⏭️ SKIPPED (user mode - custom question provided)")
         return False
     
     log_progress("🚀 STARTING STAGE 1: QUESTION GENERATION")
@@ -302,22 +310,25 @@ def run_pipeline():
     
     # USER MODE: Single question
     if USER_MODE:
-        log_progress("🧑 USER MODE: Running single question")
+        log("=" * 60)
+        log("🧑 USER MODE: Running single question")
+        log("=" * 60)
         
         if not USER_QUESTION_JSON:
-            log("[ERROR] USER_QUESTION_JSON not set")
+            log("[ERROR] ❌ USER_QUESTION_JSON not set but USER_MODE enabled")
             sys.exit(1)
         
         try:
             qobj = json.loads(USER_QUESTION_JSON)
-            log(f"[USER] Processing Q {qobj.get('question_id')}")
+            q_id = qobj.get("question_id", "user_question")
+            log(f"[USER] ✅ Loaded question: Q {q_id}")
             
-            # Skip Stage 1
+            # Skip Stage 1 - mark as complete with user's question
             state["stage1"]["complete"] = True
             state["stage1"]["output_a_minimal_api_array"] = [qobj]
             state["stage1"]["output_b_evidence_packet"] = {
-                qobj.get("question_id"): {
-                    "question_text": qobj.get("question_text", ""),
+                q_id: {
+                    "question_text": qobj.get("title", ""),
                     "consequences": {
                         "near_term": "User-provided question",
                         "knock_ons": "User-provided question"
@@ -325,34 +336,43 @@ def run_pipeline():
                 }
             }
             
+            log(f"[USER] ⏭️ Skipping Stage 1 (question generation)")
+            
             # Run Stage 2 & 3 for this question
             if run_stage2_for_question(qobj, state):
                 run_stage3_for_question(qobj, state)
             
-            log_progress("✅ USER MODE COMPLETE")
-            log(f"[OUTPUT] Results saved to: out/Q_{qobj.get('question_id')}/")
+            log("=" * 60)
+            log("✅ USER MODE COMPLETE")
+            log("=" * 60)
+            log(f"[OUTPUT] Results saved to: out/Q_{q_id}/")
             return
         
+        except json.JSONDecodeError as e:
+            log(f"[ERROR] ❌ Invalid JSON in USER_QUESTION_JSON: {e}")
+            sys.exit(1)
         except Exception as e:
-            log(f"[ERROR] User mode failed: {e}")
+            log(f"[ERROR] ❌ User mode failed: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
     
     # NORMAL MODE: Full pipeline
-    log_progress("🤖 NORMAL MODE: Full pipeline")
+    log("=" * 60)
+    log("🤖 NORMAL MODE: Full pipeline")
+    log("=" * 60)
     
     # Stage 1: Question Generation
     if not state["stage1"]["complete"]:
         if not run_stage1_pipeline(state):
-            log("[FATAL] Stage 1 failed - aborting")
+            log("[FATAL] ❌ Stage 1 failed - aborting")
             sys.exit(1)
     else:
-        log("[RESUME] Stage 1 already complete - skipping")
+        log("[RESUME] ✅ Stage 1 already complete - skipping")
     
     # Get questions
     questions = state["stage1"]["output_a_minimal_api_array"][:MAX_QUESTIONS]
-    log(f"[PIPELINE] Processing {len(questions)} questions")
+    log(f"[PIPELINE] 📋 Processing {len(questions)} questions")
     
     # Stages 2 & 3: Loop through each question
     for qobj in questions:
@@ -360,7 +380,7 @@ def run_pipeline():
         
         # Check if already complete
         if q_id in state["stage3"] and state["stage3"][q_id]["complete"]:
-            log(f"[RESUME] Q {q_id} already complete - skipping")
+            log(f"[RESUME] ✅ Q {q_id} already complete - skipping")
             continue
         
         # Run Stage 2 (methods)
@@ -372,7 +392,7 @@ def run_pipeline():
     if not state["stage4"]["complete"]:
         run_stage4_pipeline(state)
     else:
-        log("[RESUME] Stage 4 already complete - skipping")
+        log("[RESUME] ✅ Stage 4 already complete - skipping")
     
     # Final summary
     log("=" * 80)
@@ -401,10 +421,10 @@ if __name__ == "__main__":
     try:
         run_pipeline()
     except KeyboardInterrupt:
-        log("\n[INTERRUPTED] Pipeline stopped by user")
+        log("\n[INTERRUPTED] ⚠️ Pipeline stopped by user")
         sys.exit(1)
     except Exception as e:
-        log(f"\n[FATAL ERROR] {e}")
+        log(f"\n[FATAL ERROR] ❌ {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
