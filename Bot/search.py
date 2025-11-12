@@ -320,7 +320,7 @@ async def agentic_search(query: str) -> str:
         write(f"[agentic_search] ⚠️ No LLM client available, using MODEL_RS fallback")
         return await llm_based_search(query, search_type="deep_research")
     
-    max_steps = 2
+    max_steps = 2  # Reduced for fast mode (was 7)
     current_analysis = ""
     all_search_queries = []
     
@@ -522,12 +522,9 @@ async def google_search(query, is_news=False, date_before=None):
     CRITICAL: Never skip this functionality!
     """
     if not HAS_SERPER:
-        write(f"[google_search] ⚠️ Serper API not configured, using MODEL_RS fallback")
-        # Use MODEL_RS to generate URLs/content instead
-        search_type = "news" if is_news else "general"
-        result = await llm_based_search(query, search_type=search_type)
-        # Return empty list since we can't get real URLs, but the content will be in result
-        return []
+        write(f"[google_search] ⚠️ Serper API not configured, skipping URL search")
+        # Return special marker to indicate fallback was already done
+        return ["__FALLBACK_DONE__"]
     
     original_query = query
     query = query.replace('"', '').replace("'", '').strip()
@@ -582,7 +579,7 @@ async def google_search(query, is_news=False, date_before=None):
         # Fall back to MODEL_RS
         search_type = "news" if is_news else "general"
         await llm_based_search(query, search_type=search_type)
-        return []
+        return ["__FALLBACK_DONE__"]
 
 # ========================================
 # GPT CALL
@@ -627,9 +624,9 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
     try:
         urls = await google_search(query, is_news, date_before)
 
-        if not urls:
-            write(f"[google_search_and_scrape] ⚠️ No URLs returned, using MODEL_RS fallback")
-            # Fallback: use MODEL_RS to generate content directly
+        if not urls or urls == ["__FALLBACK_DONE__"]:
+            write(f"[google_search_and_scrape] ⚠️ No URLs or fallback already done, using MODEL_RS")
+            # Only call fallback once
             search_type = "news" if is_news else "general"
             result = await llm_based_search(query, search_type=search_type)
             return result
@@ -696,8 +693,8 @@ async def google_search_agentic(query, is_news=False):
     try:
         urls = await google_search(query, is_news)
 
-        if not urls:
-            write(f"[google_search_agentic] ⚠️ No URLs returned, using MODEL_RS fallback")
+        if not urls or urls == ["__FALLBACK_DONE__"]:
+            write(f"[google_search_agentic] ⚠️ No URLs or fallback done, using MODEL_RS")
             search_type = "news" if is_news else "general"
             result = await llm_based_search(query, search_type=search_type)
             return result
@@ -744,7 +741,7 @@ async def google_search_agentic(query, is_news=False):
         return f"<RawContent query=\"{query}\">Error during search: {str(e)}</RawContent>\n"
 
 # ========================================
-# PROCESS SEARCH QUERIES
+# PROCESS SEARCH QUERIES (FULL MODE)
 # ========================================
 
 async def process_search_queries(response: str, forecaster_id: str, question_details: dict):
@@ -851,6 +848,118 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
         import traceback
         write(f"Traceback: {traceback.format_exc()}")
         return "Error processing some search queries. Partial results may be available."
+
+# ========================================
+# PROCESS SEARCH QUERIES LITE (FAST MODE)
+# ========================================
+
+async def process_search_queries_lite(response: str, forecaster_id: str, question_details: dict, skip_agent: bool = True):
+    """
+    LITE/FAST MODE: Processes search queries but skips expensive Agent/Perplexity searches.
+    Only executes Google + Google News searches.
+    
+    Args:
+        response: LLM response containing search queries
+        forecaster_id: ID of the forecaster
+        question_details: Question details dict
+        skip_agent: If True, skip Agent/Perplexity queries (default: True for fast mode)
+    
+    Returns:
+        Formatted search results
+    """
+    try:
+        write(f"[process_search_queries_lite] Forecaster {forecaster_id}: Fast mode (skip_agent={skip_agent})")
+        
+        # 1) Extract the "Search queries:" block
+        search_queries_block = re.search(r'(?:Search queries:)(.*)', response, re.DOTALL | re.IGNORECASE)
+        if not search_queries_block:
+            write(f"Forecaster {forecaster_id}: No search queries block found")
+            return ""
+
+        queries_text = search_queries_block.group(1).strip()
+
+        # 2) Try to find queries
+        search_queries = re.findall(
+            r'(?:\d+\.\s*)?(["\']?(.*?)["\']?)\s*\((Google|Google News|Assistant|Agent|Perplexity)\)',
+            queries_text
+        )
+        if not search_queries:
+            search_queries = re.findall(
+                r'(?:\d+\.\s*)?([^(\n]+)\s*\((Google|Google News|Assistant|Agent|Perplexity)\)',
+                queries_text
+            )
+
+        if not search_queries:
+            write(f"Forecaster {forecaster_id}: No valid search queries found")
+            return ""
+
+        write(f"Forecaster {forecaster_id}: Processing {len(search_queries)} search queries (lite mode)")
+
+        # 4) Filter and execute queries
+        tasks = []
+        query_sources = []
+        
+        for match in search_queries:
+            if len(match) == 3:
+                _, raw_query, source = match
+            else:
+                raw_query, source = match
+
+            query = raw_query.strip().strip('"').strip("'")
+            if not query:
+                continue
+
+            # SKIP Agent/Perplexity in fast mode
+            if skip_agent and source in ("Agent", "Perplexity"):
+                write(f"Forecaster {forecaster_id}: ⏭️ SKIPPING {source} query in fast mode: '{query}'")
+                continue
+            
+            write(f"Forecaster {forecaster_id}: Query='{query}' Source={source}")
+            query_sources.append((query, source))
+
+            if source in ("Google", "Google News"):
+                tasks.append(
+                    google_search_and_scrape(
+                        query,
+                        is_news=(source == "Google News"),
+                        question_details=question_details,
+                        date_before=question_details.get("resolution_date")
+                    )
+                )
+            elif source == "Assistant":
+                tasks.append(call_asknews(query))
+
+        if not tasks:
+            write(f"Forecaster {forecaster_id}: No tasks generated (all skipped in fast mode)")
+            return ""
+
+        # 5) Await all tasks
+        formatted_results = ""
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+        # 6) Format outputs
+        for (query, source), result in zip(query_sources, results):
+            if isinstance(result, Exception):
+                write(f"[process_search_queries_lite] ❌ Forecaster {forecaster_id}: Error for '{query}' → {str(result)}")
+                if source == "Assistant":
+                    formatted_results += f"\n<Asknews_articles>\nQuery: {query}\nError: {str(result)}\n</Asknews_articles>\n"
+                else:
+                    formatted_results += f"\n<Summary query=\"{query}\">\nError: {str(result)}\n</Summary>\n"
+            else:
+                write(f"[process_search_queries_lite] ✅ Forecaster {forecaster_id}: Query '{query}' processed")
+                
+                if source == "Assistant":
+                    formatted_results += f"\n<Asknews_articles>\nQuery: {query}\n{result}</Asknews_articles>\n"
+                else:
+                    formatted_results += result
+
+        return formatted_results
+
+    except Exception as e:
+        write(f"Forecaster {forecaster_id}: Error in lite mode: {str(e)}")
+        import traceback
+        write(f"Traceback: {traceback.format_exc()}")
+        return "Error processing search queries in lite mode."
 
 # ========================================
 # MAIN (for testing)
