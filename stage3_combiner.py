@@ -37,6 +37,7 @@ def extract_forecast_value(leg_results: dict, leg_name: str) -> Optional[float]:
     """
     Extract forecast value from a leg's results.
     Handles binary (P_YES), numeric (MEAN), MC (average of probs), date (mean of dates).
+    Also handles Panshul's direct forecast values.
     Returns a single float value for equal-weighting.
     """
     if not leg_results or not isinstance(leg_results, dict):
@@ -50,6 +51,30 @@ def extract_forecast_value(leg_results: dict, leg_name: str) -> Optional[float]:
     if not isinstance(result_data, dict):
         return None
     
+    # SPECIAL CASE: Panshul results (no branches, direct forecast)
+    if leg_name == "PANSHUL" and "forecast" in result_data:
+        forecast = result_data["forecast"]
+        
+        # Binary: single float
+        if isinstance(forecast, (int, float)):
+            return float(forecast)
+        
+        # Multiple choice: dict of probabilities
+        if isinstance(forecast, dict):
+            # For MC, return the highest probability (most likely outcome)
+            # This is a simplification but allows equal-weighting
+            probs = [float(v) for v in forecast.values() if isinstance(v, (int, float))]
+            return max(probs) if probs else None
+        
+        # Numeric: list (CDF)
+        if isinstance(forecast, list):
+            # CDF list - skip for now, too complex for simple averaging
+            log(f"[COMBINER] Panshul numeric CDF detected - skipping for simple average")
+            return None
+        
+        return None
+    
+    # NORMAL CASE: Method results with branches (A/B/C/D)
     # Find the branch (A, B, C, or D)
     branch = None
     for key in ['A', 'B', 'C', 'D']:
@@ -69,13 +94,13 @@ def extract_forecast_value(leg_results: dict, leg_name: str) -> Optional[float]:
     if "MEAN" in branch:
         return float(branch["MEAN"])
     
-    # Multiple choice: average of probabilities (not ideal but simple)
+    # Multiple choice: highest probability
     if "CANDIDATE_PROBS" in branch:
         probs = branch["CANDIDATE_PROBS"]
         if isinstance(probs, list):
-            # Average all probabilities as a simple metric
-            total = sum(float(item.get("p", 0)) for item in probs if isinstance(item, dict))
-            return total / len(probs) if probs else None
+            # Return highest probability
+            values = [float(item.get("p", 0)) for item in probs if isinstance(item, dict)]
+            return max(values) if values else None
     
     # Date: not easily reduced to single value, skip for now
     if "DATE_PROBS" in branch:
@@ -142,6 +167,7 @@ def combine_forecasts(
     
     # Call LLM
     final_payload = None
+    response = ""
     
     for attempt in range(1, MAX_RETRIES + 1):
         response = call_llm(
@@ -258,7 +284,7 @@ def run_stage3(
         log(f"[STAGE3] ⚠️ No evidence found for Q {q_id} in OUTPUT_B")
         # Create empty evidence
         evidence_for_this_q = {
-            "question_text": qobj.get("question_text", ""),
+            "question_text": qobj.get("question_text", qobj.get("title", "")),
             "consequences": {
                 "near_term": "No evidence available",
                 "knock_ons": "No evidence available"
