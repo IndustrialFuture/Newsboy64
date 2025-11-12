@@ -44,10 +44,42 @@ def get_openai_client():
         raise ValueError("No OpenAI or OpenRouter API key found")
 
 # ========================================
-# CLAUDE CALLS (via Metaculus proxy)
+# CLAUDE CALLS (OpenRouter or Metaculus proxy)
 # ========================================
 
+async def call_claude_via_openrouter(prompt):
+    """
+    Call Claude via OpenRouter instead of Metaculus proxy.
+    """
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY not set")
+    
+    try:
+        write("[call_claude_via_openrouter] Calling Claude Sonnet 4 via OpenRouter")
+        client = OpenAI(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1"
+        )
+        
+        response = client.chat.completions.create(
+            model="anthropic/claude-sonnet-4-20250514",
+            messages=[
+                {"role": "system", "content": claude_context},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=16000
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        write(f"[call_claude_via_openrouter] Error: {str(e)}")
+        raise
+
 async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_content=claude_context):
+    """
+    Call Claude via Metaculus proxy (requires METACULUS_TOKEN).
+    """
     url = "https://llm-proxy.metaculus.com/proxy/anthropic/v1/messages/"
     headers = {
         "Authorization": f"Token {METACULUS_TOKEN}",
@@ -132,18 +164,26 @@ async def call_anthropic_api(prompt, max_tokens=16000, max_retries=7, cached_con
 
 
 async def call_claude(prompt):
-    try:
-        response = await call_anthropic_api(prompt)
-        
-        if not response:
-            write("Warning: Empty response from Anthropic API")
-            return "API returned empty response"
+    """
+    Call Claude - use OpenRouter if available, otherwise Metaculus proxy.
+    """
+    if OPENROUTER_API_KEY:
+        write("[call_claude] Using OpenRouter")
+        return await call_claude_via_openrouter(prompt)
+    else:
+        write("[call_claude] Using Metaculus proxy (requires METACULUS_TOKEN)")
+        try:
+            response = await call_anthropic_api(prompt)
             
-        return response
-        
-    except Exception as e:
-        write(f"Error in call_claude: {str(e)}")
-        return f"Error generating response: {str(e)}"
+            if not response:
+                write("Warning: Empty response from Anthropic API")
+                return "API returned empty response"
+                
+            return response
+            
+        except Exception as e:
+            write(f"Error in call_claude: {str(e)}")
+            return f"Error generating response: {str(e)}"
 
 # ========================================
 # UTILITY FUNCTIONS
@@ -199,39 +239,6 @@ async def call_gpt_o3(prompt):
     # Use personal credits via OpenRouter/OpenAI
     ans = await call_gpt_o3_personal(prompt)
     return ans
-    
-    # Original Metaculus proxy code (commented out)
-    # try:
-    #     url = "https://llm-proxy.metaculus.com/proxy/openai/v1/chat/completions"
-    #     headers = {
-    #         "Content-Type": "application/json",
-    #         "Authorization": f"Token {METACULUS_TOKEN}"
-    #     }
-    #     
-    #     data = {
-    #         "model": "o3",
-    #         "messages": [{"role": "user", "content": prompt}],
-    #     }
-    #     
-    #     timeout = ClientTimeout(total=300)  # 5 minutes total timeout
-    #     
-    #     async with ClientSession(timeout=timeout) as session:
-    #         async with session.post(url, headers=headers, json=data) as response:
-    #             if response.status != 200:
-    #                 error_text = await response.text()
-    #                 write(f"API error (status {response.status}): {error_text}")
-    #                 response.raise_for_status()
-    #             
-    #             result = await response.json()
-    #             
-    #             answer = result['choices'][0]['message']['content']
-    #             if answer is None:
-    #                 raise ValueError("No answer returned from GPT")
-    #             return answer
-    #             
-    # except Exception as e:
-    #     write(f"Error in call_gpt: {str(e)}")
-    #     return f"Error generating response: {str(e)}"
 
 
 async def call_gpt_o4_mini(prompt):
