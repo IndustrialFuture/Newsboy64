@@ -3,29 +3,20 @@ name: Forecast Pipeline
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Run mode'
-        required: true
-        type: choice
-        options:
-          - 'normal'
-          - 'user'
-        default: 'normal'
-      
-      topic:
-        description: 'Topic for question generation (normal mode only)'
-        required: false
-        type: string
-        default: 'Current events and trends'
-      
       user_question:
-        description: 'Single question JSON (user mode only)'
+        description: '🔹 Single question JSON (leave blank for normal mode with topic generation)'
         required: false
         type: string
         default: ''
       
+      topic:
+        description: 'Topic for question generation (only used if user_question is blank)'
+        required: false
+        type: string
+        default: 'Current events and trends'
+      
       max_questions:
-        description: 'Max questions to generate (normal mode)'
+        description: 'Max questions to generate (normal mode only)'
         required: false
         type: number
         default: 3
@@ -41,9 +32,9 @@ on:
         required: false
         type: choice
         options:
-          - 'fast'
           - 'full'
-        default: 'fast'
+          - 'fast'
+        default: 'full'
       
       enable_methods:
         description: 'Enable KM/BD/EX methods'
@@ -76,8 +67,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
+      - name: Determine Mode
+        id: mode
+        run: |
+          if [ -n "${{ github.event.inputs.user_question }}" ]; then
+            echo "mode=user" >> $GITHUB_OUTPUT
+            echo "Running in USER MODE (custom question provided)"
+          else
+            echo "mode=normal" >> $GITHUB_OUTPUT
+            echo "Running in NORMAL MODE (topic-based generation)"
+          fi
+      
       - name: Run Forecast Pipeline (Normal Mode)
-        if: ${{ github.event.inputs.mode == 'normal' }}
+        if: steps.mode.outputs.mode == 'normal'
         env:
           # API Keys
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -120,7 +122,7 @@ jobs:
           python forecast_orchestrator.py
       
       - name: Run Forecast Pipeline (User Mode)
-        if: ${{ github.event.inputs.mode == 'user' }}
+        if: steps.mode.outputs.mode == 'user'
         env:
           # API Keys
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -171,7 +173,13 @@ jobs:
         run: |
           echo "## Forecast Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ steps.mode.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Panshul Mode:** ${{ github.event.inputs.panshul_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f "out/state.json" ]; then
             echo "### State" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat out/state.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
