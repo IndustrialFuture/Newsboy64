@@ -204,9 +204,8 @@ def combine_forecasts(
         save_response("combiner_full.txt", response)
         return None
     
-    # Save outputs
+    # Save combiner response
     save_response("combiner_full.txt", response)
-    save_response("final_payload.json", json.dumps(final_payload, indent=2))
     
     # Calculate simple equal-weight average for validation
     values = []
@@ -249,6 +248,27 @@ def combine_forecasts(
         "simple_average": sum(v for _, v in values) / len(values) if values else None
     }
     
+    # CRITICAL FIX: Inject all method results into final_payload for artifact downloads
+    if "all_method_results" not in final_payload:
+        final_payload["all_method_results"] = {}
+    
+    # Add Panshul
+    if panshul_result:
+        final_payload["all_method_results"]["PANSHUL_RESULTS"] = panshul_result.get("PANSHUL_RESULTS", {})
+    
+    # Add KM, BD
+    for method_name in ["KM", "BD"]:
+        if method_name in method_results:
+            result_key = f"{method_name}_RESULTS"
+            final_payload["all_method_results"][result_key] = method_results[method_name].get(result_key, {})
+    
+    # Add EX (special structure with MK + PL)
+    if "EX" in method_results:
+        ex_result = method_results["EX"]
+        final_payload["all_method_results"]["MK_RESULTS"] = ex_result.get("MK_RESULTS", {})
+        final_payload["all_method_results"]["PL_RESULTS"] = ex_result.get("PL_RESULTS", {})
+    
+    # Save final payload with all method results
     save_response("final_payload.json", json.dumps(final_payload, indent=2))
     
     log_progress(f"✅ COMBINER COMPLETE FOR Q {qobj.get('question_id')}")
