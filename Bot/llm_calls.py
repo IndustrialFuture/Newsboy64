@@ -55,14 +55,14 @@ async def call_claude_via_openrouter(prompt):
         raise ValueError("OPENROUTER_API_KEY not set")
     
     try:
-        write("[call_claude_via_openrouter] Calling Claude Sonnet 4 via OpenRouter")
+        write("[call_claude_via_openrouter] Calling Claude 3.5 Sonnet via OpenRouter")
         client = OpenAI(
             api_key=OPENROUTER_API_KEY,
             base_url="https://openrouter.ai/api/v1"
         )
         
         response = client.chat.completions.create(
-            model="anthropic/claude-sonnet-4-20250514",
+            model="anthropic/claude-3.5-sonnet",  # FIXED: Valid OpenRouter model ID
             messages=[
                 {"role": "system", "content": claude_context},
                 {"role": "user", "content": prompt}
