@@ -3,71 +3,79 @@ name: Forecast Pipeline
 on:
   workflow_dispatch:
     inputs:
-      user_question:
-        description: '🔹 Custom Question JSON (leave blank to auto-generate questions from topic)'
+      mode:
+        description: 'Run mode (normal or user)'
         required: false
-        type: string
-        default: ''
-      
+        default: 'normal'
+        type: choice
+        options:
+          - normal
+          - user
       topic:
-        description: 'Topic (ignored if custom question provided above)'
+        description: 'Topic for question generation (normal mode only)'
         required: false
-        type: string
         default: 'Current events and trends'
-      
-      max_questions:
-        description: 'Max questions to generate (ignored if custom question provided above)'
+      user_question:
+        description: 'User question JSON (user mode only)'
         required: false
-        type: number
-        default: 3
-      
+        default: ''
+      max_questions:
+        description: 'Maximum number of questions to process'
+        required: false
+        default: '3'
       enable_panshul:
         description: 'Enable Panshul bot'
         required: false
-        type: boolean
-        default: true
-      
-      panshul_mode:
-        description: 'Panshul bot mode (if enabled)'
-        required: false
+        default: 'true'
         type: choice
         options:
-          - 'full'
-          - 'fast'
-        default: 'full'
-      
-      enable_methods:
-        description: 'Enable KM/BD/EX methods'
+          - 'true'
+          - 'false'
+      panshul_mode:
+        description: 'Panshul mode (full or fast)'
         required: false
-        type: boolean
-        default: true
-      
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - fast
+      enable_methods:
+        description: 'Enable method runner (KM/BD/EX)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       enable_veo:
         description: 'Enable Veo script generation'
         required: false
-        type: boolean
-        default: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   forecast:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # 3 hours max
     
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Determine Mode
+      - name: Determine mode
         id: mode
         run: |
           USER_Q='${{ github.event.inputs.user_question }}'
@@ -79,8 +87,7 @@ jobs:
             echo "🎯 Running in NORMAL MODE (generating ${{ github.event.inputs.max_questions }} questions about '${{ github.event.inputs.topic }}')"
           fi
       
-      - name: Run Forecast Pipeline (Normal Mode)
-        if: steps.mode.outputs.mode == 'normal'
+      - name: Run forecast pipeline
         env:
           # API Keys
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -93,16 +100,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           
-          # Models
+          # Model Configuration
           MODEL_RS: ${{ secrets.MODEL_RS }}
           MODEL_QG: ${{ secrets.MODEL_QG }}
           MODEL_FC: ${{ secrets.MODEL_FC }}
           MODEL_BK: ${{ secrets.MODEL_BK }}
           
           # Prompts
-          PROMPT_RS1: ${{ secrets.PROMPT_RS1 }}
-          PROMPT_RS2: ${{ secrets.PROMPT_RS2 }}
-          PROMPT_QG: ${{ secrets.PROMPT_QG }}
           PROMPT_KM_PT1: ${{ secrets.PROMPT_KM_PT1 }}
           PROMPT_KM_PT2: ${{ secrets.PROMPT_KM_PT2 }}
           PROMPT_BD_PT1: ${{ secrets.PROMPT_BD_PT1 }}
@@ -112,8 +116,9 @@ jobs:
           PROMPT_FINAL_COMBINER: ${{ secrets.PROMPT_FINAL_COMBINER }}
           PROMPT_REPORTER: ${{ secrets.PROMPT_REPORTER }}
           
-          # Config - NORMAL MODE
-          MODE: normal
+          # Pipeline Configuration
+          MODE: ${{ steps.mode.outputs.mode }}
+          USER_QUESTION_JSON: ${{ github.event.inputs.user_question }}
           TOPIC: ${{ github.event.inputs.topic }}
           MAX_QUESTIONS: ${{ github.event.inputs.max_questions }}
           ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
@@ -123,53 +128,15 @@ jobs:
         run: |
           python forecast_orchestrator.py
       
-      - name: Run Forecast Pipeline (User Mode)
-        if: steps.mode.outputs.mode == 'user'
-        env:
-          # API Keys
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
-          SERPER_KEY: ${{ secrets.SERPER_API_KEY }}
-          ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
-          ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
-          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          
-          # Models
-          MODEL_RS: ${{ secrets.MODEL_RS }}
-          MODEL_QG: ${{ secrets.MODEL_QG }}
-          MODEL_FC: ${{ secrets.MODEL_FC }}
-          MODEL_BK: ${{ secrets.MODEL_BK }}
-          
-          # Prompts
-          PROMPT_KM_PT1: ${{ secrets.PROMPT_KM_PT1 }}
-          PROMPT_KM_PT2: ${{ secrets.PROMPT_KM_PT2 }}
-          PROMPT_BD_PT1: ${{ secrets.PROMPT_BD_PT1 }}
-          PROMPT_BD_PT2: ${{ secrets.PROMPT_BD_PT2 }}
-          PROMPT_EX_PT1: ${{ secrets.PROMPT_EX_PT1 }}
-          PROMPT_EX_PT2: ${{ secrets.PROMPT_EX_PT2 }}
-          PROMPT_FINAL_COMBINER: ${{ secrets.PROMPT_FINAL_COMBINER }}
-          
-          # Config - USER MODE
-          MODE: user
-          USER_QUESTION_JSON: ${{ github.event.inputs.user_question }}
-          ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
-          PANSHUL_MODE: ${{ github.event.inputs.panshul_mode }}
-          ENABLE_METHODS: ${{ github.event.inputs.enable_methods }}
-        run: |
-          python forecast_orchestrator.py
-      
-      - name: Upload outputs
-        if: always()
+      - name: Upload forecast outputs
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: forecast-outputs
           path: out/
           retention-days: 30
       
-      - name: Display summary
+      - name: Generate summary
         if: always()
         run: |
           echo "## Forecast Pipeline Summary" >> $GITHUB_STEP_SUMMARY
