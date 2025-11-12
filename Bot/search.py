@@ -77,16 +77,7 @@ METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Model configuration
-MODEL_RS = os.getenv("MODEL_RS", "")  # Research/search model
-MODEL_FC = os.getenv("MODEL_FC", "")  # Main forecaster
-MODEL_BK = os.getenv("MODEL_BK", "")  # Backup model
-MODEL_QG = os.getenv("MODEL_QG", "")  # Question generation
-
-# Fallback model for search (use Claude 3.5 Sonnet if MODEL_RS not set)
-FALLBACK_MODEL = MODEL_RS if MODEL_RS else "anthropic/claude-3.5-sonnet:beta"
-
-# Use OpenRouter for OpenAI calls (routes through OpenRouter)
+# Use OpenRouter for all LLM calls
 if OPENROUTER_API_KEY:
     client = OpenAI(
         api_key=OPENROUTER_API_KEY,
@@ -106,123 +97,13 @@ HAS_SERPER = bool(SERPER_KEY)
 HAS_ASKNEWS = bool(ASKNEWS_CLIENT_ID and ASKNEWS_SECRET)
 HAS_NEWSAPI = bool(NEWSAPI_KEY)
 HAS_PERPLEXITY = bool(PERPLEXITY_API_KEY)
-HAS_RESEARCH_MODEL = bool(FALLBACK_MODEL and OPENROUTER_API_KEY)
 
 # Log API availability
 write(f"[INIT] API Availability:")
-write(f"  Serper (Google): {'✅' if HAS_SERPER else '❌ → Will use fallback model'}")
-write(f"  AskNews: {'✅' if HAS_ASKNEWS else '⚠️ → Will try NewsAPI, then fallback model'}")
-write(f"  NewsAPI: {'✅' if HAS_NEWSAPI else '❌ → Will use fallback model'}")
-write(f"  Perplexity: {'✅' if HAS_PERPLEXITY else '❌ → Will use fallback model'}")
-write(f"  Research Model (MODEL_RS): {'✅' if HAS_RESEARCH_MODEL else '❌'}")
-
-if HAS_RESEARCH_MODEL:
-    write(f"[INIT] 📝 Fallback model: {FALLBACK_MODEL}")
-else:
-    write(f"[INIT] ⚠️ WARNING: No fallback model configured - fallbacks will not work properly!")
-
-# ========================================
-# FALLBACK: LLM-BASED SEARCH (when APIs missing)
-# ========================================
-
-async def llm_based_search(query: str, search_type: str = "general") -> str:
-    """
-    Fallback search using FALLBACK_MODEL when external APIs unavailable.
-    Uses Claude 3.5 Sonnet by default if MODEL_RS not configured.
-    
-    Args:
-        query: Search query
-        search_type: "general", "news", "deep_research", or "asknews"
-    
-    Returns:
-        Formatted search results
-    """
-    write(f"[llm_based_search] Using {FALLBACK_MODEL} fallback for query: '{query}' (type: {search_type})")
-    
-    if not FALLBACK_MODEL or not OPENROUTER_API_KEY:
-        write(f"[llm_based_search] ❌ ERROR: No fallback model configured!")
-        return f"<SearchResults query=\"{query}\">ERROR: No fallback model configured.</SearchResults>\n"
-    
-    # Build prompt based on search type
-    if search_type == "news":
-        prompt = f"""You are a research assistant. The user needs current news about: {query}
-
-Provide a comprehensive summary of recent news and developments on this topic. Include:
-- Key recent events and their dates
-- Important statistics and facts
-- Expert opinions and analysis
-- Relevant sources (cite real news organizations and dates)
-
-Format your response as if you're summarizing multiple news articles."""
-    
-    elif search_type == "deep_research":
-        prompt = f"""You are a deep research assistant. Conduct thorough research on: {query}
-
-Provide comprehensive analysis including:
-- Historical context and background
-- Current state and recent developments
-- Expert analysis and opinions
-- Statistical data and trends
-- Future projections and implications
-- Cite all sources with names and dates
-
-Be thorough and detailed. Be objective, providing documented facts only."""
-    
-    elif search_type == "asknews":
-        prompt = f"""You are a news research assistant. Provide recent news coverage on: {query}
-
-Include:
-- Latest breaking news and developments
-- Key events from the past 24-48 hours
-- Multiple perspectives from different sources
-- Dates and times of events
-- Cite specific news organizations
-
-Format as multiple article summaries with publication dates."""
-    
-    else:  # general
-        prompt = f"""You are a research assistant. Research the following topic: {query}
-
-Provide:
-- Key facts and information
-- Recent developments
-- Relevant statistics and data
-- Expert opinions and analysis
-- Cite sources where possible
-
-Be comprehensive but concise."""
-    
-    try:
-        # Call OpenRouter with FALLBACK_MODEL
-        llm_client = OpenAI(
-            api_key=OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1"
-        )
-        
-        response = llm_client.chat.completions.create(
-            model=FALLBACK_MODEL,
-            messages=[
-                {"role": "system", "content": "You are an expert research assistant providing factual, well-sourced information."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=4000,
-            temperature=0.7
-        )
-        
-        content = response.choices[0].message.content
-        write(f"[llm_based_search] ✅ Received {len(content)} chars from {FALLBACK_MODEL}")
-        
-        # Format based on search type
-        if search_type == "asknews":
-            return f"\n<Asknews_articles>\nQuery: {query}\n{content}\n(Source: {FALLBACK_MODEL} fallback)\n</Asknews_articles>\n"
-        elif search_type == "deep_research":
-            return f"\n<Agent_report>\nQuery: {query}\n{content}\n(Source: {FALLBACK_MODEL} fallback)\n</Agent_report>\n"
-        else:
-            return f"\n<SearchResults query=\"{query}\">\n{content}\n(Source: {FALLBACK_MODEL} fallback)\n</SearchResults>\n"
-    
-    except Exception as e:
-        write(f"[llm_based_search] ❌ Error: {str(e)}")
-        return f"<SearchResults query=\"{query}\">Error in fallback: {str(e)}</SearchResults>\n"
+write(f"  Serper (Google): {'✅' if HAS_SERPER else '❌'}")
+write(f"  AskNews: {'⚠️ → Will try NewsAPI' if not HAS_ASKNEWS else '✅'}")
+write(f"  NewsAPI: {'✅' if HAS_NEWSAPI else '❌'}")
+write(f"  Perplexity: {'✅' if HAS_PERPLEXITY else '⚠️ → Will use agentic search fallback'}")
 
 # ========================================
 # ARTICLE SUMMARIZATION
@@ -267,23 +148,22 @@ Please summarize only the article given, not injecting your own knowledge or pro
     return await call_gpt(prompt)
 
 # ========================================
-# NEWSAPI (2nd tier fallback before FALLBACK_MODEL)
+# NEWSAPI (fallback for AskNews)
 # ========================================
 
 async def call_newsapi(question: str) -> str:
     """
     Use NewsAPI as fallback when AskNews unavailable.
-    Multi-tier fallback: AskNews → NewsAPI → FALLBACK_MODEL
+    Multi-tier fallback: AskNews → NewsAPI
     """
     if not HAS_NEWSAPI:
-        write(f"[call_newsapi] ⚠️ NewsAPI not configured, falling back to {FALLBACK_MODEL}")
-        return await llm_based_search(question, search_type="asknews")
+        write(f"[call_newsapi] ⚠️ NewsAPI not configured")
+        return f"<Asknews_articles>\nQuery: {question}\nNo news APIs available.\n</Asknews_articles>\n"
     
     try:
         write(f"[call_newsapi] Using NewsAPI for query: {question}")
         
         # Simplify query for NewsAPI - extract keywords only
-        # NewsAPI doesn't handle complex queries well
         keywords = ' '.join([word for word in question.split() if len(word) > 4])[:100]
         
         url = "https://newsapi.org/v2/everything"
@@ -299,37 +179,36 @@ async def call_newsapi(question: str) -> str:
             timeout = aiohttp.ClientTimeout(total=30)
             async with session.get(url, params=params, timeout=timeout) as response:
                 if response.status == 429:
-                    write(f"[call_newsapi] ⚠️ Rate limit hit, falling back to {FALLBACK_MODEL}")
-                    return await llm_based_search(question, search_type="asknews")
+                    write(f"[call_newsapi] ⚠️ Rate limit hit")
+                    return f"<Asknews_articles>\nQuery: {question}\nNewsAPI rate limit reached.\n</Asknews_articles>\n"
                 
                 if response.status != 200:
                     error_text = await response.text()
                     write(f"[call_newsapi] ❌ Error {response.status}: {error_text}")
-                    write(f"[call_newsapi] Falling back to {FALLBACK_MODEL}")
-                    return await llm_based_search(question, search_type="asknews")
+                    return f"<Asknews_articles>\nQuery: {question}\nNewsAPI error.\n</Asknews_articles>\n"
                 
                 data = await response.json()
                 
                 if data.get("status") != "ok":
                     write(f"[call_newsapi] ❌ API returned status: {data.get('status')}")
-                    return await llm_based_search(question, search_type="asknews")
+                    return f"<Asknews_articles>\nQuery: {question}\nNewsAPI unavailable.\n</Asknews_articles>\n"
                 
                 articles = data.get("articles", [])
                 
                 if not articles:
-                    write(f"[call_newsapi] No articles found, falling back to {FALLBACK_MODEL}")
-                    return await llm_based_search(question, search_type="asknews")
+                    write(f"[call_newsapi] No articles found")
+                    return f"<Asknews_articles>\nQuery: {question}\nNo articles found.\n</Asknews_articles>\n"
                 
                 write(f"[call_newsapi] ✅ Found {len(articles)} articles")
                 
                 formatted_articles = "Here are the relevant news articles:\n\n"
                 
-                for article in articles[:8]:  # Limit to 8 articles like AskNews
+                for article in articles[:8]:
                     title = article.get("title", "No title")
                     description = article.get("description", "No description available")
                     published_at = article.get("publishedAt", "Unknown date")
                     source_name = article.get("source", {}).get("name", "Unknown source")
-                    url = article.get("url", "")
+                    url_link = article.get("url", "")
                     
                     # Parse and format date
                     try:
@@ -344,16 +223,16 @@ async def call_newsapi(question: str) -> str:
                     formatted_articles += f"**{title}**\n"
                     formatted_articles += f"{description}\n"
                     formatted_articles += f"Publish date: {formatted_date}\n"
-                    formatted_articles += f"Source: [{source_name}]({url})\n\n"
+                    formatted_articles += f"Source: [{source_name}]({url_link})\n\n"
                 
                 return formatted_articles
                 
     except asyncio.TimeoutError:
-        write(f"[call_newsapi] ⚠️ Timeout, falling back to {FALLBACK_MODEL}")
-        return await llm_based_search(question, search_type="asknews")
+        write(f"[call_newsapi] ⚠️ Timeout")
+        return f"<Asknews_articles>\nQuery: {question}\nNewsAPI timeout.\n</Asknews_articles>\n"
     except Exception as e:
-        write(f"[call_newsapi] ❌ Error: {str(e)}, falling back to {FALLBACK_MODEL}")
-        return await llm_based_search(question, search_type="asknews")
+        write(f"[call_newsapi] ❌ Error: {str(e)}")
+        return f"<Asknews_articles>\nQuery: {question}\nNewsAPI error: {str(e)}\n</Asknews_articles>\n"
 
 # ========================================
 # ASKNEWS API (with NewsAPI fallback)
@@ -361,9 +240,8 @@ async def call_newsapi(question: str) -> str:
 
 async def call_asknews(question: str) -> str:
     """
-    Use AskNews API if available, otherwise fall back to NewsAPI, then FALLBACK_MODEL.
-    Multi-tier fallback: AskNews → NewsAPI → FALLBACK_MODEL
-    CRITICAL: Never skip this functionality!
+    Use AskNews API if available, otherwise fall back to NewsAPI.
+    Multi-tier fallback: AskNews → NewsAPI
     """
     if not HAS_ASKNEWS:
         write(f"[call_asknews] ⚠️ AskNews API not configured, trying NewsAPI")
@@ -427,21 +305,21 @@ async def call_asknews(question: str) -> str:
         return await call_newsapi(question)
 
 # ========================================
-# AGENTIC SEARCH (with fallback)
+# AGENTIC SEARCH (for deep research)
 # ========================================
 
 async def agentic_search(query: str) -> str:
     """
-    Performs agentic search using GPT to iteratively research and analyze a query.
-    Falls back to FALLBACK_MODEL if OpenAI/OpenRouter not available.
+    Performs agentic search using o3 to iteratively research and analyze a query.
+    Used as fallback when Perplexity API is unavailable.
     """
     write(f"[agentic_search] Starting research for query: {query}")
     
     if not client:
-        write(f"[agentic_search] ⚠️ No LLM client available, using {FALLBACK_MODEL} fallback")
-        return await llm_based_search(query, search_type="deep_research")
+        write(f"[agentic_search] ⚠️ No LLM client available")
+        return f"<Agent_report>\nQuery: {query}\nNo LLM client configured.\n</Agent_report>\n"
     
-    max_steps = 2  # Reduced for fast mode (was 7)
+    max_steps = 2  # Reduced for efficiency (was 7 in original)
     current_analysis = ""
     all_search_queries = []
     
@@ -450,7 +328,7 @@ async def agentic_search(query: str) -> str:
     total_output_tokens = 0
     
     def estimate_tokens(text: str) -> int:
-        """Estimate token count using ~4 characters per token rule for GPT models"""
+        """Estimate token count using ~4 characters per token rule"""
         return max(1, len(text) // 4)
     
     def calculate_cost(input_tokens: int, output_tokens: int) -> float:
@@ -479,7 +357,7 @@ async def agentic_search(query: str) -> str:
             prompt_tokens = estimate_tokens(prompt)
             total_input_tokens += prompt_tokens
             
-            write(f"[agentic_search] Step {step + 1}: Calling GPT")
+            write(f"[agentic_search] Step {step + 1}: Calling o3")
             response = await call_gpt(prompt, step)
             
             response_tokens = estimate_tokens(response)
@@ -489,7 +367,7 @@ async def agentic_search(query: str) -> str:
             analysis_match = re.search(r'Analysis:\s*(.*?)(?=Search queries:|$)', response, re.DOTALL)
             if not analysis_match:
                 write(f"[agentic_search] Error: Could not parse analysis from response")
-                return f"Error: Failed to parse analysis at step {step + 1}"
+                return f"<Agent_report>\nQuery: {query}\nError parsing analysis.\n</Agent_report>\n"
             
             if step > 0:
                 current_analysis = analysis_match.group(1).strip()
@@ -502,7 +380,7 @@ async def agentic_search(query: str) -> str:
             
             if step == 0 and not search_queries_match:
                 write(f"[agentic_search] Error: No search queries in initial response")
-                return "Error: Failed to generate initial search queries"
+                return f"<Agent_report>\nQuery: {query}\nError: No search queries generated.\n</Agent_report>\n"
             
             if not search_queries_match or step == max_steps - 1:
                 if step > 0:
@@ -516,7 +394,7 @@ async def agentic_search(query: str) -> str:
             if not search_queries_with_source:
                 if step == 0:
                     write(f"[agentic_search] Error: No valid search queries in initial response")
-                    return "Error: Failed to parse initial search queries"
+                    return f"<Agent_report>\nQuery: {query}\nError: Failed to parse search queries.\n</Agent_report>\n"
                 else:
                     write(f"[agentic_search] No new search queries, completing research")
                     break
@@ -553,7 +431,7 @@ async def agentic_search(query: str) -> str:
             if current_analysis:
                 break
             else:
-                return f"Error during agentic search: {str(e)}"
+                return f"<Agent_report>\nQuery: {query}\nError: {str(e)}\n</Agent_report>\n"
     
     steps_used = step + 1
     total_cost = calculate_cost(total_input_tokens, total_output_tokens)
@@ -564,22 +442,22 @@ async def agentic_search(query: str) -> str:
     print(f"   Estimated cost: ${total_cost:.4f}")
     
     if not current_analysis:
-        return "Error: No analysis was generated during the research process"
+        return f"<Agent_report>\nQuery: {query}\nError: No analysis generated.\n</Agent_report>\n"
     
     return current_analysis
 
 # ========================================
-# PERPLEXITY API (with fallback)
+# PERPLEXITY API (with agentic search fallback)
 # ========================================
 
 async def call_perplexity(prompt: str) -> str:
     """
-    Call Perplexity API if available, otherwise fall back to FALLBACK_MODEL.
-    CRITICAL: Never skip this functionality!
+    Call Perplexity API if available, otherwise fall back to agentic search.
+    Multi-tier fallback: Perplexity → agentic_search (o3 + Google)
     """
     if not HAS_PERPLEXITY:
-        write(f"[call_perplexity] ⚠️ Perplexity API not configured, using {FALLBACK_MODEL} fallback")
-        return await llm_based_search(prompt, search_type="deep_research")
+        write(f"[call_perplexity] ⚠️ Perplexity API not configured, using agentic search fallback")
+        return await agentic_search(prompt)
     
     url = "https://api.perplexity.ai/chat/completions"
     payload = {
@@ -616,6 +494,9 @@ async def call_perplexity(prompt: str) -> str:
                         content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
                         write(f"[Perplexity API] ✅ Success on attempt {attempt}")
                         return content.strip()
+                    elif response.status == 401:
+                        write(f"[Perplexity API] ❌ 401 Unauthorized - API key invalid/expired, using agentic search fallback")
+                        return await agentic_search(prompt)
                     else:
                         response_text = await response.text()
                         write(f"[Perplexity API] ❌ Error: HTTP {response.status}: {response_text[:200]}...")
@@ -628,24 +509,23 @@ async def call_perplexity(prompt: str) -> str:
             write(f"[Perplexity API] 🔁 Retrying in {wait_time} seconds...")
             await asyncio.sleep(wait_time)
         else:
-            write(f"[Perplexity API] ❌ Max retries reached, falling back to {FALLBACK_MODEL}")
-            return await llm_based_search(prompt, search_type="deep_research")
+            write(f"[Perplexity API] ❌ Max retries reached, using agentic search fallback")
+            return await agentic_search(prompt)
 
-    return "Unexpected error in call_perplexity"
+    return await agentic_search(prompt)
 
 # ========================================
-# GOOGLE SEARCH (with fallback)
+# GOOGLE SEARCH (core function)
 # ========================================
 
 async def google_search(query, is_news=False, date_before=None):
     """
-    Google search via Serper API if available, otherwise use FALLBACK_MODEL.
-    CRITICAL: Never skip this functionality!
+    Google search via Serper API.
+    Returns list of URLs or empty list if unavailable.
     """
     if not HAS_SERPER:
-        write(f"[google_search] ⚠️ Serper API not configured, skipping URL search")
-        # Return special marker to indicate fallback was already done
-        return ["__FALLBACK_DONE__"]
+        write(f"[google_search] ⚠️ Serper API not configured")
+        return []
     
     original_query = query
     query = query.replace('"', '').replace("'", '').strip()
@@ -707,42 +587,25 @@ async def google_search(query, is_news=False, date_before=None):
         tb = traceback.format_exc()
         write(f"[google_search] Traceback:\n{tb}")
         
-        # Fall back to FALLBACK_MODEL
-        write(f"[google_search] Falling back to {FALLBACK_MODEL}")
-        search_type = "news" if is_news else "general"
-        await llm_based_search(query, search_type=search_type)
-        return ["__FALLBACK_DONE__"]
+        return []
 
 # ========================================
-# GPT CALL
+# GPT CALL (using o3 via OpenRouter)
 # ========================================
 
 async def call_gpt(prompt, step=1):
+    """Call o3 via OpenRouter for research tasks"""
     if not client:
         write(f"[call_gpt] ❌ No LLM client available")
         return "Error: No LLM client configured"
     
     try:
-        # Check if using o3 reasoning model (if MODEL_FC contains "o3")
-        model_to_use = MODEL_FC if MODEL_FC else "gpt-4"
-        
-        if "o3" in model_to_use.lower():
-            # Use reasoning model format
-            response = client.responses.create(
-                model=model_to_use,
-                input=prompt
-            )
-            return response.output_text
-        else:
-            # Standard chat completion
-            response = client.chat.completions.create(
-                model=model_to_use,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=4000
-            )
-            return response.choices[0].message.content
+        # Use o3 (full, not mini) as per original
+        response = client.responses.create(
+            model="openai/o3",
+            input=prompt
+        )
+        return response.output_text
     except Exception as e:
         write(f"[call_gpt] Error: {str(e)}")
         return f"Error calling LLM API: {str(e)}"
@@ -752,16 +615,17 @@ async def call_gpt(prompt, step=1):
 # ========================================
 
 async def google_search_and_scrape(query, is_news, question_details, date_before=None):
+    """
+    Performs Google search and scrapes/summarizes articles.
+    Lets 401 errors fail gracefully (as per original behavior).
+    """
     write(f"[google_search_and_scrape] Called with query='{query}', is_news={is_news}, date_before={date_before}")
     try:
         urls = await google_search(query, is_news, date_before)
 
-        if not urls or urls == ["__FALLBACK_DONE__"]:
-            write(f"[google_search_and_scrape] ⚠️ No URLs or fallback already done, using {FALLBACK_MODEL}")
-            # Only call fallback once
-            search_type = "news" if is_news else "general"
-            result = await llm_based_search(query, search_type=search_type)
-            return result
+        if not urls:
+            write(f"[google_search_and_scrape] ❌ No URLs returned for query: '{query}'")
+            return f"<Summary query=\"{query}\">No URLs returned from Google.</Summary>\n"
 
         async with FastContentExtractor() as extractor:
             write(f"[google_search_and_scrape] 🔍 Starting content extraction for {len(urls)} URLs")
@@ -789,10 +653,8 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
                 write(f"[google_search_and_scrape] ⚠️ No content for {url}, skipping summarization.")
 
         if not summarize_tasks:
-            write(f"[google_search_and_scrape] ⚠️ No content to summarize, using {FALLBACK_MODEL} fallback")
-            search_type = "news" if is_news else "general"
-            result = await llm_based_search(query, search_type=search_type)
-            return result
+            write("[google_search_and_scrape] ⚠️ Warning: No content to summarize (all 401 errors or low content) - letting fail as original bot did")
+            return f"<Summary query=\"{query}\">No usable content extracted from any URL (401 errors or low content).</Summary>\n"
 
         summaries = await asyncio.gather(*summarize_tasks, return_exceptions=True)
 
@@ -812,24 +674,21 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
         return f"<Summary query=\"{query}\">Error during search and scrape: {str(e)}</Summary>\n"
 
 # ========================================
-# GOOGLE SEARCH AGENTIC
+# GOOGLE SEARCH AGENTIC (raw content)
 # ========================================
 
 async def google_search_agentic(query, is_news=False):
     """
     Performs Google search and returns raw article content without summarization.
     Used for agentic search where the agent will analyze the raw content.
-    Falls back to FALLBACK_MODEL if Serper unavailable.
     """
     write(f"[google_search_agentic] Called with query='{query}', is_news={is_news}")
     try:
         urls = await google_search(query, is_news)
 
-        if not urls or urls == ["__FALLBACK_DONE__"]:
-            write(f"[google_search_agentic] ⚠️ No URLs or fallback done, using {FALLBACK_MODEL}")
-            search_type = "news" if is_news else "general"
-            result = await llm_based_search(query, search_type=search_type)
-            return result
+        if not urls:
+            write(f"[google_search_agentic] ❌ No URLs returned for query: '{query}'")
+            return f"<RawContent query=\"{query}\">No URLs returned from Google.</RawContent>\n"
 
         async with FastContentExtractor() as extractor:
             write(f"[google_search_agentic] 🔍 Starting content extraction for {len(urls)} URLs")
@@ -858,10 +717,8 @@ async def google_search_agentic(query, is_news=False):
                 write(f"[google_search_agentic] ⚠️ No content for {url}, skipping.")
 
         if not output:
-            write(f"[google_search_agentic] ⚠️ No usable content found, using {FALLBACK_MODEL} fallback")
-            search_type = "news" if is_news else "general"
-            result = await llm_based_search(query, search_type=search_type)
-            return result
+            write("[google_search_agentic] ⚠️ Warning: No usable content found (401 errors or low content) - letting fail as original bot did")
+            return f"<RawContent query=\"{query}\">No usable content extracted from any URL (401 errors or low content).</RawContent>\n"
 
         return output
         
@@ -879,8 +736,8 @@ async def google_search_agentic(query, is_news=False):
 async def process_search_queries(response: str, forecaster_id: str, question_details: dict):
     """
     Parses out search queries from the forecaster's response, executes them
-    (AskNews, Agent or Google/Google News), and returns formatted summaries.
-    ALL functionality is preserved with fallbacks - NO SKIPS!
+    (AskNews, Agent/Perplexity or Google/Google News), and returns formatted summaries.
+    ALL functionality is preserved with fallbacks.
     """
     try:
         # 1) Extract the "Search queries:" block
@@ -923,9 +780,6 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
             if not query:
                 continue
 
-            # ✅ CRITICAL FIX: Keep Perplexity and Agent separate!
-            # Do NOT remap Perplexity to Agent - they're different!
-            
             write(f"Forecaster {forecaster_id}: Query='{query}' Source={source}")
             query_sources.append((query, source))
 
@@ -941,10 +795,8 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
             elif source == "Assistant":
                 tasks.append(call_asknews(query))
             elif source == "Perplexity":
-                # ✅ Call Perplexity API directly!
                 tasks.append(call_perplexity(query))
             elif source == "Agent":
-                # ✅ Call agentic search (GPT + Google)
                 tasks.append(agentic_search(query))
 
         if not tasks:
@@ -962,7 +814,7 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
                 if source == "Assistant":
                     formatted_results += f"\n<Asknews_articles>\nQuery: {query}\nError retrieving results: {str(result)}\n</Asknews_articles>\n"
                 elif source in ("Agent", "Perplexity"):
-                    formatted_results += f"\n<Agent_report>\nQuery: {query}\n{result}\n</Agent_report>\n"
+                    formatted_results += f"\n<Agent_report>\nQuery: {query}\nError: {str(result)}\n</Agent_report>\n"
                 else:
                     formatted_results += f"\n<Summary query=\"{query}\">\nError retrieving results: {str(result)}\n</Summary>\n"
             else:
@@ -990,16 +842,7 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
 async def process_search_queries_lite(response: str, forecaster_id: str, question_details: dict, skip_agent: bool = True):
     """
     LITE/FAST MODE: Processes search queries but skips expensive Agent/Perplexity searches.
-    Only executes Google + Google News searches.
-    
-    Args:
-        response: LLM response containing search queries
-        forecaster_id: ID of the forecaster
-        question_details: Question details dict
-        skip_agent: If True, skip Agent/Perplexity queries (default: True for fast mode)
-    
-    Returns:
-        Formatted search results
+    Only executes Google + Google News + Assistant searches.
     """
     try:
         write(f"[process_search_queries_lite] Forecaster {forecaster_id}: Fast mode (skip_agent={skip_agent})")
