@@ -71,6 +71,7 @@ def validate_time(before_date_str, source_date_str):
 SERPER_KEY = os.getenv("SERPER_KEY") or os.getenv("SERPER_API_KEY")
 ASKNEWS_CLIENT_ID = os.getenv("ASKNEWS_CLIENT_ID")
 ASKNEWS_SECRET = os.getenv("ASKNEWS_SECRET")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -100,13 +101,15 @@ else:
 # Check which APIs are available
 HAS_SERPER = bool(SERPER_KEY)
 HAS_ASKNEWS = bool(ASKNEWS_CLIENT_ID and ASKNEWS_SECRET)
+HAS_NEWSAPI = bool(NEWSAPI_KEY)
 HAS_PERPLEXITY = bool(PERPLEXITY_API_KEY)
 HAS_RESEARCH_MODEL = bool(MODEL_RS and OPENROUTER_API_KEY)
 
 # Log API availability
 write(f"[INIT] API Availability:")
 write(f"  Serper (Google): {'✅' if HAS_SERPER else '❌ → Will use MODEL_RS fallback'}")
-write(f"  AskNews: {'✅' if HAS_ASKNEWS else '❌ → Will use MODEL_RS fallback'}")
+write(f"  AskNews: {'✅' if HAS_ASKNEWS else '⚠️ → Will try NewsAPI, then MODEL_RS fallback'}")
+write(f"  NewsAPI: {'✅' if HAS_NEWSAPI else '❌ → Will use MODEL_RS fallback'}")
 write(f"  Perplexity: {'✅' if HAS_PERPLEXITY else '❌ → Will use MODEL_RS fallback'}")
 write(f"  Research Model (MODEL_RS): {'✅' if HAS_RESEARCH_MODEL else '❌'}")
 
@@ -119,7 +122,7 @@ if not HAS_RESEARCH_MODEL:
 
 async def llm_based_search(query: str, search_type: str = "general") -> str:
     """
-    Fallback search using MODEL_RS when external APIs (Serper/AskNews/Perplexity) are unavailable.
+    Fallback search using MODEL_RS when external APIs (Serper/AskNews/NewsAPI/Perplexity) are unavailable.
     This preserves search functionality without degrading quality.
     
     Args:
@@ -259,17 +262,103 @@ Please summarize only the article given, not injecting your own knowledge or pro
     return await call_gpt(prompt)
 
 # ========================================
-# ASKNEWS API (with fallback)
+# NEWSAPI (2nd tier fallback before MODEL_RS)
+# ========================================
+
+async def call_newsapi(question: str) -> str:
+    """
+    Use NewsAPI as fallback when AskNews unavailable.
+    Multi-tier fallback: AskNews → NewsAPI → MODEL_RS
+    """
+    if not HAS_NEWSAPI:
+        write(f"[call_newsapi] ⚠️ NewsAPI not configured, falling back to MODEL_RS")
+        return await llm_based_search(question, search_type="asknews")
+    
+    try:
+        write(f"[call_newsapi] Using NewsAPI for query: {question}")
+        
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": question,
+            "apiKey": NEWSAPI_KEY,
+            "pageSize": 10,
+            "sortBy": "relevancy",
+            "language": "en"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with session.get(url, params=params, timeout=timeout) as response:
+                if response.status == 429:
+                    write(f"[call_newsapi] ⚠️ Rate limit hit, falling back to MODEL_RS")
+                    return await llm_based_search(question, search_type="asknews")
+                
+                if response.status != 200:
+                    error_text = await response.text()
+                    write(f"[call_newsapi] ❌ Error {response.status}: {error_text}")
+                    write(f"[call_newsapi] Falling back to MODEL_RS")
+                    return await llm_based_search(question, search_type="asknews")
+                
+                data = await response.json()
+                
+                if data.get("status") != "ok":
+                    write(f"[call_newsapi] ❌ API returned status: {data.get('status')}")
+                    return await llm_based_search(question, search_type="asknews")
+                
+                articles = data.get("articles", [])
+                
+                if not articles:
+                    write(f"[call_newsapi] No articles found")
+                    return "No recent news articles found.\n"
+                
+                write(f"[call_newsapi] ✅ Found {len(articles)} articles")
+                
+                formatted_articles = "Here are the relevant news articles:\n\n"
+                
+                for article in articles[:8]:  # Limit to 8 articles like AskNews
+                    title = article.get("title", "No title")
+                    description = article.get("description", "No description available")
+                    published_at = article.get("publishedAt", "Unknown date")
+                    source_name = article.get("source", {}).get("name", "Unknown source")
+                    url = article.get("url", "")
+                    
+                    # Parse and format date
+                    try:
+                        parsed_date = dateparser.parse(published_at)
+                        if parsed_date:
+                            formatted_date = parsed_date.strftime("%B %d, %Y %I:%M %p")
+                        else:
+                            formatted_date = published_at
+                    except:
+                        formatted_date = published_at
+                    
+                    formatted_articles += f"**{title}**\n"
+                    formatted_articles += f"{description}\n"
+                    formatted_articles += f"Publish date: {formatted_date}\n"
+                    formatted_articles += f"Source: [{source_name}]({url})\n\n"
+                
+                return formatted_articles
+                
+    except asyncio.TimeoutError:
+        write(f"[call_newsapi] ⚠️ Timeout, falling back to MODEL_RS")
+        return await llm_based_search(question, search_type="asknews")
+    except Exception as e:
+        write(f"[call_newsapi] ❌ Error: {str(e)}, falling back to MODEL_RS")
+        return await llm_based_search(question, search_type="asknews")
+
+# ========================================
+# ASKNEWS API (with NewsAPI fallback)
 # ========================================
 
 async def call_asknews(question: str) -> str:
     """
-    Use AskNews API if available, otherwise fall back to MODEL_RS.
+    Use AskNews API if available, otherwise fall back to NewsAPI, then MODEL_RS.
+    Multi-tier fallback: AskNews → NewsAPI → MODEL_RS
     CRITICAL: Never skip this functionality!
     """
     if not HAS_ASKNEWS:
-        write(f"[call_asknews] ⚠️ AskNews API not configured, using MODEL_RS fallback")
-        return await llm_based_search(question, search_type="asknews")
+        write(f"[call_asknews] ⚠️ AskNews API not configured, trying NewsAPI")
+        return await call_newsapi(question)
     
     try:
         write(f"[call_asknews] Using AskNews API for query: {question}")
@@ -321,10 +410,12 @@ async def call_asknews(question: str) -> str:
             formatted_articles += "No articles were found.\n\n"
             return formatted_articles
 
+        write(f"[call_asknews] ✅ Successfully retrieved articles")
         return formatted_articles
+        
     except Exception as e:
-        write(f"[call_asknews] ❌ AskNews API error: {str(e)}, falling back to MODEL_RS")
-        return await llm_based_search(question, search_type="asknews")
+        write(f"[call_asknews] ❌ AskNews API error: {str(e)}, trying NewsAPI")
+        return await call_newsapi(question)
 
 # ========================================
 # AGENTIC SEARCH (with fallback)
