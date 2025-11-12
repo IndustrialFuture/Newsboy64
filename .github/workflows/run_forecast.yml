@@ -36,6 +36,15 @@ on:
         type: boolean
         default: true
       
+      panshul_mode:
+        description: 'Panshul bot mode (if enabled)'
+        required: false
+        type: choice
+        options:
+          - 'fast'
+          - 'full'
+        default: 'fast'
+      
       enable_methods:
         description: 'Enable KM/BD/EX methods'
         required: false
@@ -100,6 +109,7 @@ jobs:
           TOPIC: ${{ github.event.inputs.topic }}
           MAX_QUESTIONS: ${{ github.event.inputs.max_questions }}
           ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
+          PANSHUL_MODE: ${{ github.event.inputs.panshul_mode }}
           ENABLE_METHODS: ${{ github.event.inputs.enable_methods }}
           ENABLE_VEO: ${{ github.event.inputs.enable_veo }}
         run: |
@@ -135,6 +145,7 @@ jobs:
           
           # Config
           ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
+          PANSHUL_MODE: ${{ github.event.inputs.panshul_mode }}
           ENABLE_METHODS: ${{ github.event.inputs.enable_methods }}
         run: |
           python forecast_orchestrator.py
@@ -155,3 +166,4 @@ jobs:
           
           if [ -f "out/state.json" ]; then
             echo "### State" >> $GITHUB_STEP_SUMMARY
+          fi
