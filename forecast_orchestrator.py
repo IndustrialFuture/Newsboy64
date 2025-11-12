@@ -342,6 +342,11 @@ def run_pipeline():
             if run_stage2_for_question(qobj, state):
                 run_stage3_for_question(qobj, state)
             
+            # CRITICAL FIX: Run Stage 4 (Veo) in USER mode too
+            if ENABLE_VEO_GENERATION:
+                log("[USER] Running Stage 4 (Veo generation)")
+                run_stage4_pipeline(state)
+            
             log("=" * 60)
             log("✅ USER MODE COMPLETE")
             log("=" * 60)
