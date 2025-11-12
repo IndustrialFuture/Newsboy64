@@ -18,12 +18,13 @@ from utils import log
 
 # Try to import bot modules
 try:
-    from Bot.forecaster import forecast  # ✅ CHANGED FROM Bot.run to Bot.main
+    from Bot.forecaster import binary_forecast, multiple_choice_forecast, numeric_forecast
     from Bot.search import write
     log("[PANSHUL] ✅ Bot modules imported successfully")
+    BOT_AVAILABLE = True
 except ImportError as e:
     log(f"[PANSHUL] ❌ Failed to import bot modules: {e}")
-    forecast = None
+    BOT_AVAILABLE = False
 
 # ========================================
 # CONFIGURATION
@@ -88,28 +89,6 @@ def check_api_availability():
 def convert_to_panshul_format(qobj: dict) -> dict:
     """
     Convert our question format to Panshul's expected format.
-    
-    Our format:
-    {
-        "question_id": "12345",
-        "question_type": "binary",
-        "title": "Will X happen?",
-        "resolution_criteria": "...",
-        "description": "...",
-        "fine_print": "...",
-        "resolution_date": "2025-12-31T23:59:59Z"
-    }
-    
-    Panshul format:
-    {
-        "id": 12345,
-        "type": "binary",
-        "title": "Will X happen?",
-        "resolution_criteria": "...",
-        "background": "...",
-        "fine_print": "...",
-        "resolution_date": "2025-12-31T23:59:59Z"
-    }
     """
     return {
         "id": qobj.get("question_id", "unknown"),
@@ -140,7 +119,7 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
     log("=" * 60)
     
     # Check if bot is available
-    if forecast is None:
+    if not BOT_AVAILABLE:
         log("[PANSHUL] ❌ Bot not available (import failed)")
         return None
     
@@ -156,8 +135,16 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
     log(f"[PANSHUL] Running forecast for Q {q_id} (type: {q_type}, mode: {PANSHUL_MODE})")
     
     try:
-        # Run the bot with mode parameter
-        result = asyncio.run(forecast(panshul_question, mode=PANSHUL_MODE))
+        # Route to the correct forecast function based on type
+        if q_type == "binary":
+            result = asyncio.run(binary_forecast(panshul_question))
+        elif q_type == "multiple_choice":
+            result = asyncio.run(multiple_choice_forecast(panshul_question))
+        elif q_type == "numeric":
+            result = asyncio.run(numeric_forecast(panshul_question))
+        else:
+            log(f"[PANSHUL] ❌ Unknown question type: {q_type}")
+            return None
         
         if result is None:
             log(f"[PANSHUL] ❌ Bot returned None for Q {q_id}")
@@ -165,12 +152,15 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
         
         log(f"[PANSHUL] ✅ Forecast complete for Q {q_id}")
         
-        # Extract the forecast from result
-        # Panshul bot returns a dict with 'forecast' key
-        if isinstance(result, dict) and "forecast" in result:
-            return result
+        # The bot returns (forecast, comment) tuple
+        if isinstance(result, tuple) and len(result) == 2:
+            forecast, comment = result
+            return {
+                "forecast": forecast,
+                "comment": comment
+            }
         else:
-            log(f"[PANSHUL] ⚠️ Unexpected result format, wrapping in dict")
+            log(f"[PANSHUL] ⚠️ Unexpected result format: {type(result)}")
             return {"forecast": result}
     
     except Exception as e:
