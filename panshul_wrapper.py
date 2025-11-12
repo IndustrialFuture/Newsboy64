@@ -4,6 +4,7 @@
 Forecast Pipeline - Panshul Bot Wrapper
 Wraps Panshul's bot with API fallbacks and output translation.
 Handles missing optional API keys gracefully (Serper, AskNews, Gemini).
+Supports FAST and FULL modes via PANSHUL_MODE environment variable.
 """
 
 import os
@@ -27,6 +28,21 @@ try:
 except ImportError as e:
     log(f"[ERROR] Failed to import Panshul's bot: {e}")
     PANSHUL_BOT_AVAILABLE = False
+
+# ========================================
+# MODE CONFIGURATION
+# ========================================
+
+PANSHUL_MODE = os.getenv("PANSHUL_MODE", "fast").lower()  # "fast" or "full"
+
+log(f"[PANSHUL] Mode: {PANSHUL_MODE.upper()}")
+if PANSHUL_MODE == "fast":
+    log(f"[PANSHUL] Fast mode: ~18 calls, 2 forecasters, skips agentic search")
+elif PANSHUL_MODE == "full":
+    log(f"[PANSHUL] Full mode: ~54 calls, 5 forecasters, includes agentic search")
+else:
+    log(f"[PANSHUL] ⚠️ Unknown mode '{PANSHUL_MODE}', defaulting to 'fast'")
+    PANSHUL_MODE = "fast"
 
 # ========================================
 # API KEY CHECKING
@@ -108,28 +124,21 @@ def translate_panshul_binary_output(panshul_result, qobj: dict) -> dict:
     """
     Translate Panshul's binary output to our unified format.
     
-    Panshul returns: ReasonedPrediction with prediction_value (float)
+    Panshul returns: tuple (probability_float, reasoning_text)
     We need: {"PANSHUL_RESULTS": {"A": {"P_YES": x, "P_NO": y}}}
     """
     try:
-        # Extract probability - handle both object and dict formats
-        if hasattr(panshul_result, 'prediction_value'):
-            p_yes = float(panshul_result.prediction_value)
-        elif isinstance(panshul_result, dict):
-            p_yes = float(panshul_result.get('prediction_value', 0.5))
+        # Panshul's binary forecast returns (prob, full_output_text)
+        if isinstance(panshul_result, tuple):
+            p_yes, reasoning = panshul_result
+            p_yes = float(p_yes)
         else:
+            # Fallback if format is different
             p_yes = float(panshul_result)
+            reasoning = "Multi-model ensemble forecast"
         
         p_yes = max(0.01, min(0.99, p_yes))  # Clamp to [0.01, 0.99]
         p_no = 1.0 - p_yes
-        
-        # Get reasoning if available
-        if hasattr(panshul_result, 'reasoning'):
-            reasoning = panshul_result.reasoning
-        elif isinstance(panshul_result, dict):
-            reasoning = panshul_result.get('reasoning', 'Multi-model ensemble forecast')
-        else:
-            reasoning = 'Multi-model ensemble forecast'
         
         return {
             "PANSHUL_RESULTS": {
@@ -142,7 +151,8 @@ def translate_panshul_binary_output(panshul_result, qobj: dict) -> dict:
                 "reasoning": reasoning,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "question_id": qobj.get("question_id"),
-                "method": "panshul_bot"
+                "method": "panshul_bot",
+                "mode": PANSHUL_MODE
             }
         }
     except Exception as e:
@@ -209,7 +219,8 @@ def translate_panshul_mc_output(panshul_result, qobj: dict) -> dict:
                 "reasoning": reasoning,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "question_id": qobj.get("question_id"),
-                "method": "panshul_bot"
+                "method": "panshul_bot",
+                "mode": PANSHUL_MODE
             }
         }
     except Exception as e:
@@ -287,7 +298,8 @@ def translate_panshul_numeric_output(panshul_result, qobj: dict) -> dict:
                 "reasoning": reasoning,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "question_id": qobj.get("question_id"),
-                "method": "panshul_bot"
+                "method": "panshul_bot",
+                "mode": PANSHUL_MODE
             }
         }
     except Exception as e:
@@ -302,15 +314,16 @@ async def run_panshul_async(qobj: dict) -> dict:
     """
     Run Panshul's bot asynchronously.
     Returns translated results in unified format.
+    Mode is controlled by PANSHUL_MODE environment variable.
     """
     q_type = qobj.get("question_type", "binary").lower()
     
-    log(f"[PANSHUL] Running forecast for Q {qobj.get('question_id')} (type: {q_type})")
+    log(f"[PANSHUL] Running forecast for Q {qobj.get('question_id')} (type: {q_type}, mode: {PANSHUL_MODE})")
     
     # Create question dict (not a class instance)
     question_dict = create_question_dict(qobj)
     
-    # Run appropriate forecast function
+    # Run appropriate forecast function (mode routing happens inside forecaster.py)
     if q_type == "binary":
         result = await binary_forecast(question_dict)
         translated = translate_panshul_binary_output(result, qobj)
@@ -326,7 +339,7 @@ async def run_panshul_async(qobj: dict) -> dict:
     else:
         raise ValueError(f"Unsupported question type: {q_type}")
     
-    log(f"[PANSHUL] ✅ Forecast complete")
+    log(f"[PANSHUL] ✅ Forecast complete ({PANSHUL_MODE} mode)")
     return translated
 
 # ========================================
