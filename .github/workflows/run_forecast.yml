@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       user_question:
-        description: '🔹 Single question JSON (leave blank for normal mode with topic generation)'
+        description: '🔹 Custom Question JSON (leave blank to auto-generate questions from topic)'
         required: false
         type: string
         default: ''
       
       topic:
-        description: 'Topic for question generation (only used if user_question is blank)'
+        description: 'Topic (ignored if custom question provided above)'
         required: false
         type: string
         default: 'Current events and trends'
       
       max_questions:
-        description: 'Max questions to generate (normal mode only)'
+        description: 'Max questions to generate (ignored if custom question provided above)'
         required: false
         type: number
         default: 3
@@ -72,10 +72,10 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.user_question }}" ]; then
             echo "mode=user" >> $GITHUB_OUTPUT
-            echo "Running in USER MODE (custom question provided)"
+            echo "🎯 Running in USER MODE (custom question provided)"
           else
             echo "mode=normal" >> $GITHUB_OUTPUT
-            echo "Running in NORMAL MODE (topic-based generation)"
+            echo "🎯 Running in NORMAL MODE (generating ${{ github.event.inputs.max_questions }} questions about '${{ github.event.inputs.topic }}')"
           fi
       
       - name: Run Forecast Pipeline (Normal Mode)
@@ -111,7 +111,8 @@ jobs:
           PROMPT_FINAL_COMBINER: ${{ secrets.PROMPT_FINAL_COMBINER }}
           PROMPT_REPORTER: ${{ secrets.PROMPT_REPORTER }}
           
-          # Config
+          # Config - NORMAL MODE
+          MODE: normal
           TOPIC: ${{ github.event.inputs.topic }}
           MAX_QUESTIONS: ${{ github.event.inputs.max_questions }}
           ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
@@ -150,10 +151,9 @@ jobs:
           PROMPT_EX_PT2: ${{ secrets.PROMPT_EX_PT2 }}
           PROMPT_FINAL_COMBINER: ${{ secrets.PROMPT_FINAL_COMBINER }}
           
-          # User question
+          # Config - USER MODE
+          MODE: user
           USER_QUESTION_JSON: ${{ github.event.inputs.user_question }}
-          
-          # Config
           ENABLE_PANSHUL: ${{ github.event.inputs.enable_panshul }}
           PANSHUL_MODE: ${{ github.event.inputs.panshul_mode }}
           ENABLE_METHODS: ${{ github.event.inputs.enable_methods }}
