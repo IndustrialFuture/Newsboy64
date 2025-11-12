@@ -277,9 +277,13 @@ async def call_newsapi(question: str) -> str:
     try:
         write(f"[call_newsapi] Using NewsAPI for query: {question}")
         
+        # Simplify query for NewsAPI - extract keywords only
+        # NewsAPI doesn't handle complex queries well
+        keywords = ' '.join([word for word in question.split() if len(word) > 4])[:100]
+        
         url = "https://newsapi.org/v2/everything"
         params = {
-            "q": question,
+            "q": keywords,
             "apiKey": NEWSAPI_KEY,
             "pageSize": 10,
             "sortBy": "relevancy",
@@ -308,8 +312,8 @@ async def call_newsapi(question: str) -> str:
                 articles = data.get("articles", [])
                 
                 if not articles:
-                    write(f"[call_newsapi] No articles found")
-                    return "No recent news articles found.\n"
+                    write(f"[call_newsapi] No articles found, falling back to MODEL_RS")
+                    return await llm_based_search(question, search_type="asknews")
                 
                 write(f"[call_newsapi] ✅ Found {len(articles)} articles")
                 
@@ -903,10 +907,8 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
             if not query:
                 continue
 
-            # Map Perplexity to Agent for backward compatibility
-            if source == "Perplexity":
-                source = "Agent"
-                write(f"Forecaster {forecaster_id}: Mapping Perplexity → Agent for query='{query}'")
+            # ✅ CRITICAL FIX: Keep Perplexity and Agent separate!
+            # Do NOT remap Perplexity to Agent - they're different!
             
             write(f"Forecaster {forecaster_id}: Query='{query}' Source={source}")
             query_sources.append((query, source))
@@ -922,7 +924,11 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
                 )
             elif source == "Assistant":
                 tasks.append(call_asknews(query))
+            elif source == "Perplexity":
+                # ✅ Call Perplexity API directly!
+                tasks.append(call_perplexity(query))
             elif source == "Agent":
+                # ✅ Call agentic search (GPT + Google)
                 tasks.append(agentic_search(query))
 
         if not tasks:
@@ -939,7 +945,7 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
                 write(f"[process_search_queries] ❌ Forecaster {forecaster_id}: Error for '{query}' → {str(result)}")
                 if source == "Assistant":
                     formatted_results += f"\n<Asknews_articles>\nQuery: {query}\nError retrieving results: {str(result)}\n</Asknews_articles>\n"
-                elif source == "Agent":
+                elif source in ("Agent", "Perplexity"):
                     formatted_results += f"\n<Agent_report>\nQuery: {query}\n{result}\n</Agent_report>\n"
                 else:
                     formatted_results += f"\n<Summary query=\"{query}\">\nError retrieving results: {str(result)}\n</Summary>\n"
@@ -948,7 +954,7 @@ async def process_search_queries(response: str, forecaster_id: str, question_det
                 
                 if source == "Assistant":
                     formatted_results += f"\n<Asknews_articles>\nQuery: {query}\n{result}</Asknews_articles>\n"
-                elif source == "Agent":
+                elif source in ("Agent", "Perplexity"):
                     formatted_results += f"\n<Agent_report>\nQuery: {query}\n{result}</Agent_report>\n"
                 else:
                     formatted_results += result
