@@ -248,25 +248,33 @@ def combine_forecasts(
         "simple_average": sum(v for _, v in values) / len(values) if values else None
     }
     
-    # CRITICAL FIX: Inject all method results into final_payload for artifact downloads
+    # CRITICAL FIX: FORCE inject all method results into final_payload for artifact downloads
+    # Initialize if needed
     if "all_method_results" not in final_payload:
         final_payload["all_method_results"] = {}
     
-    # Add Panshul
-    if panshul_result:
-        final_payload["all_method_results"]["PANSHUL_RESULTS"] = panshul_result.get("PANSHUL_RESULTS", {})
+    # FORCE inject Panshul
+    if panshul_result and "PANSHUL_RESULTS" in panshul_result:
+        final_payload["all_method_results"]["PANSHUL_RESULTS"] = panshul_result["PANSHUL_RESULTS"]
+        log(f"[COMBINER] ✅ Injected PANSHUL_RESULTS into final_payload")
     
-    # Add KM, BD
+    # FORCE inject KM, BD
     for method_name in ["KM", "BD"]:
         if method_name in method_results:
             result_key = f"{method_name}_RESULTS"
-            final_payload["all_method_results"][result_key] = method_results[method_name].get(result_key, {})
+            if result_key in method_results[method_name]:
+                final_payload["all_method_results"][result_key] = method_results[method_name][result_key]
+                log(f"[COMBINER] ✅ Injected {result_key} into final_payload")
     
-    # Add EX (special structure with MK + PL)
+    # FORCE inject EX (special structure with MK + PL)
     if "EX" in method_results:
         ex_result = method_results["EX"]
-        final_payload["all_method_results"]["MK_RESULTS"] = ex_result.get("MK_RESULTS", {})
-        final_payload["all_method_results"]["PL_RESULTS"] = ex_result.get("PL_RESULTS", {})
+        if "MK_RESULTS" in ex_result:
+            final_payload["all_method_results"]["MK_RESULTS"] = ex_result["MK_RESULTS"]
+            log(f"[COMBINER] ✅ Injected MK_RESULTS into final_payload")
+        if "PL_RESULTS" in ex_result:
+            final_payload["all_method_results"]["PL_RESULTS"] = ex_result["PL_RESULTS"]
+            log(f"[COMBINER] ✅ Injected PL_RESULTS into final_payload")
     
     # Save final payload with all method results
     save_response("final_payload.json", json.dumps(final_payload, indent=2))
