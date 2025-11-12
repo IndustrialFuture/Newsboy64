@@ -218,7 +218,7 @@ def run_stage3_for_question(qobj: dict, state: dict) -> bool:
     try:
         # Get results from Stage 2 - wrap Panshul result properly
         panshul_raw = state["stage2"][q_id]["panshul"]["result"]
-        panshul_result = {"PANSHUL_RESULTS": panshul_raw} if panshul_raw else None
+        panshul_result = panshul_raw  # Already has correct structure
         method_results = state["stage2"][q_id]["methods"]["results"]
         evidence_packet = state["stage1"]["output_b_evidence_packet"]
         
