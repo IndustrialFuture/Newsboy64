@@ -98,7 +98,10 @@ jobs:
           MODEL_FC: ${{ secrets.MODEL_FC }}
           MODEL_BK: ${{ secrets.MODEL_BK }}
           
-          # Prompts
+          # Prompts - FIXED: Split RS into RS1 and RS2
+          PROMPT_RS1: ${{ secrets.PROMPT_RS1 }}
+          PROMPT_RS2: ${{ secrets.PROMPT_RS2 }}
+          PROMPT_QG: ${{ secrets.PROMPT_QG }}
           PROMPT_KM_PT1: ${{ secrets.PROMPT_KM_PT1 }}
           PROMPT_KM_PT2: ${{ secrets.PROMPT_KM_PT2 }}
           PROMPT_BD_PT1: ${{ secrets.PROMPT_BD_PT1 }}
