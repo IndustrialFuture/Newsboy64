@@ -49,6 +49,7 @@ def check_api_availability():
     HAS_OPENROUTER = bool(os.getenv("OPENROUTER_API_KEY"))
     HAS_SERPER = bool(os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY"))
     HAS_ASKNEWS = bool(os.getenv("ASKNEWS_CLIENT_ID") and os.getenv("ASKNEWS_SECRET"))
+    HAS_NEWSDATA = bool(os.getenv("NEWSDATA_KEY"))
     HAS_NEWSAPI = bool(os.getenv("NEWSAPI_KEY"))
     HAS_PERPLEXITY = bool(os.getenv("PERPLEXITY_API_KEY"))
     HAS_GEMINI = bool(os.getenv("GEMINI_API_KEY"))
@@ -60,10 +61,15 @@ def check_api_availability():
     # News API hierarchy display
     if HAS_ASKNEWS:
         log(f"  AskNews: ✅")
+    elif HAS_NEWSDATA:
+        log(f"  AskNews: ❌ → Using NewsData.io instead")
     elif HAS_NEWSAPI:
         log(f"  AskNews: ❌ → Using NewsAPI instead")
     else:
         log(f"  AskNews: ❌ → No news APIs available")
+    
+    if HAS_NEWSDATA:
+        log(f"  NewsData.io: ✅")
     
     if HAS_NEWSAPI:
         log(f"  NewsAPI: ✅")
@@ -79,6 +85,7 @@ def check_api_availability():
         "openrouter": HAS_OPENROUTER,
         "serper": HAS_SERPER,
         "asknews": HAS_ASKNEWS,
+        "newsdata": HAS_NEWSDATA,
         "newsapi": HAS_NEWSAPI,
         "perplexity": HAS_PERPLEXITY,
         "gemini": HAS_GEMINI
