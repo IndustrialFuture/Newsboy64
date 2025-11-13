@@ -127,7 +127,7 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
         qobj: Question object in our standard format
     
     Returns:
-        Dictionary containing forecast results wrapped in PANSHUL_RESULTS, or None if failed
+        Dictionary containing forecast results, or None if failed
     """
     log("=" * 60)
     log("🤖 RUNNING PANSHUL BOT")
@@ -170,19 +170,15 @@ def run_panshul(qobj: dict) -> Optional[Dict]:
         # The bot returns (forecast, comment) tuple
         if isinstance(result, tuple) and len(result) == 2:
             forecast, comment = result
-            # CRITICAL FIX: Wrap in PANSHUL_RESULTS so combiner can find it
+            # Return the raw forecast data - combiner will wrap it in PANSHUL_RESULTS
             return {
-                "PANSHUL_RESULTS": {
-                    "forecast": forecast,
-                    "comment": comment
-                }
+                "forecast": forecast,
+                "comment": comment
             }
         else:
             log(f"[PANSHUL] ⚠️ Unexpected result format: {type(result)}")
             return {
-                "PANSHUL_RESULTS": {
-                    "forecast": result
-                }
+                "forecast": result
             }
     
     except Exception as e:
