@@ -72,6 +72,7 @@ SERPER_KEY = os.getenv("SERPER_KEY") or os.getenv("SERPER_API_KEY")
 ASKNEWS_CLIENT_ID = os.getenv("ASKNEWS_CLIENT_ID")
 ASKNEWS_SECRET = os.getenv("ASKNEWS_SECRET")
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+NEWSDATA_KEY = os.getenv("NEWSDATA_KEY")  # NEW: NewsData.io API key
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 METACULUS_TOKEN = os.getenv("METACULUS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -96,12 +97,14 @@ else:
 HAS_SERPER = bool(SERPER_KEY)
 HAS_ASKNEWS = bool(ASKNEWS_CLIENT_ID and ASKNEWS_SECRET)
 HAS_NEWSAPI = bool(NEWSAPI_KEY)
+HAS_NEWSDATA = bool(NEWSDATA_KEY)  # NEW: NewsData.io check
 HAS_PERPLEXITY = bool(PERPLEXITY_API_KEY)
 
 # Log API availability
 write(f"[INIT] API Availability:")
 write(f"  Serper (Google): {'✅' if HAS_SERPER else '❌'}")
-write(f"  AskNews: {'⚠️ → Will try NewsAPI' if not HAS_ASKNEWS else '✅'}")
+write(f"  AskNews: {'⚠️ → Will try NewsData/NewsAPI' if not HAS_ASKNEWS else '✅'}")
+write(f"  NewsData.io: {'✅' if HAS_NEWSDATA else '❌ → Using NewsAPI'}")
 write(f"  NewsAPI: {'✅' if HAS_NEWSAPI else '❌'}")
 write(f"  Perplexity: {'✅' if HAS_PERPLEXITY else '⚠️ → Will use agentic search fallback'}")
 
@@ -222,6 +225,115 @@ Please summarize only the article given, not injecting your own knowledge or pro
 # ========================================
 # NEWSAPI (fallback for AskNews)
 # ========================================
+
+async def call_newsdata(question: str) -> str:
+    """
+    Use NewsData.io API as middle tier (realtime news, 200 credits/day free).
+    Multi-tier fallback: AskNews → NewsData.io → NewsAPI
+    """
+    if not HAS_NEWSDATA:
+        write(f"[call_newsdata] ⚠️ NewsData.io not configured, trying NewsAPI")
+        return await call_newsapi(question)
+    
+    try:
+        write(f"[call_newsdata] Using NewsData.io for query: {question}")
+        
+        # Extract keywords (simpler than NewsAPI since NewsData.io handles better)
+        keywords = ' '.join([word for word in question.split() if len(word) > 4])[:80]
+        
+        url = "https://newsdata.io/api/1/news"
+        params = {
+            "apikey": NEWSDATA_KEY,
+            "q": keywords,
+            "language": "en",
+            "size": 10  # Max 10 articles per credit
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with session.get(url, params=params, timeout=timeout) as response:
+                if response.status == 429:
+                    write(f"[call_newsdata] ⚠️ Rate limit hit (200/day), trying NewsAPI")
+                    return await call_newsapi(question)
+                
+                if response.status != 200:
+                    error_text = await response.text()
+                    write(f"[call_newsdata] ❌ Error {response.status}: {error_text[:200]}")
+                    return await call_newsapi(question)
+                
+                data = await response.json()
+                
+                if data.get("status") != "success":
+                    write(f"[call_newsdata] ❌ API returned status: {data.get('status')}")
+                    return await call_newsapi(question)
+                
+                articles = data.get("results", [])
+                
+                # TIER 2: If no results, retry with ultra-simplified query (FAILSAFE)
+                if not articles:
+                    write(f"[call_newsdata] ⚠️ No results with moderate query, trying simplified fallback")
+                    
+                    # Extract only the most important 2-3 keywords
+                    import re
+                    # Remove common filler words
+                    simple_query = re.sub(r'\b(please|find|recent|expert|analysis|provide|detailed|comprehensive|information|about|regarding)\b', '', question, flags=re.IGNORECASE)
+                    # Get words longer than 5 chars, limit to 3 keywords
+                    important_words = [w for w in simple_query.split() if len(w) > 5][:3]
+                    simplified_keywords = ' '.join(important_words)
+                    
+                    if simplified_keywords and simplified_keywords != keywords:
+                        write(f"[call_newsdata] 🔄 Retrying with simplified query: '{simplified_keywords}'")
+                        
+                        # Retry with simpler query
+                        simple_params = {
+                            "apikey": NEWSDATA_KEY,
+                            "q": simplified_keywords,
+                            "language": "en",
+                            "size": 10
+                        }
+                        
+                        async with session.get(url, params=simple_params, timeout=timeout) as retry_response:
+                            if retry_response.status == 200:
+                                retry_data = await retry_response.json()
+                                if retry_data.get("status") == "success":
+                                    articles = retry_data.get("results", [])
+                                    if articles:
+                                        write(f"[call_newsdata] ✅ Simplified query found {len(articles)} articles!")
+                
+                if not articles:
+                    write(f"[call_newsdata] No articles found, trying NewsAPI")
+                    return await call_newsapi(question)
+                
+                write(f"[call_newsdata] ✅ Found {len(articles)} articles")
+                
+                # Format articles
+                formatted = "<Asknews_articles>\n"
+                formatted += f"Query: {question}\n\n"
+                
+                for article in articles:
+                    title = article.get("title", "No title")
+                    description = article.get("description") or article.get("content", "No description")
+                    link = article.get("link", "")
+                    pub_date = article.get("pubDate", "Unknown date")
+                    source = article.get("source_id", "Unknown source")
+                    
+                    formatted += f"**{title}**\n"
+                    formatted += f"{description}\n"
+                    formatted += f"Published: {pub_date}\n"
+                    formatted += f"Source: {source}\n"
+                    if link:
+                        formatted += f"URL: {link}\n"
+                    formatted += "\n"
+                
+                formatted += "</Asknews_articles>\n"
+                return formatted
+                
+    except asyncio.TimeoutError:
+        write(f"[call_newsdata] ⚠️ Timeout, trying NewsAPI")
+        return await call_newsapi(question)
+    except Exception as e:
+        write(f"[call_newsdata] ❌ Error: {str(e)}, trying NewsAPI")
+        return await call_newsapi(question)
 
 async def call_newsapi(question: str) -> str:
     """
@@ -344,12 +456,12 @@ async def call_newsapi(question: str) -> str:
 
 async def call_asknews(question: str) -> str:
     """
-    Use AskNews API if available, otherwise fall back to NewsAPI.
-    Multi-tier fallback: AskNews → NewsAPI
+    Use AskNews API if available, otherwise fall back to NewsData.io, then NewsAPI.
+    Multi-tier fallback: AskNews → NewsData.io → NewsAPI
     """
     if not HAS_ASKNEWS:
-        write(f"[call_asknews] ⚠️ AskNews API not configured, trying NewsAPI")
-        return await call_newsapi(question)
+        write(f"[call_asknews] ⚠️ AskNews API not configured, trying NewsData.io")
+        return await call_newsdata(question)
     
     try:
         write(f"[call_asknews] Using AskNews API for query: {question}")
@@ -405,8 +517,8 @@ async def call_asknews(question: str) -> str:
         return formatted_articles
         
     except Exception as e:
-        write(f"[call_asknews] ❌ AskNews API error: {str(e)}, trying NewsAPI")
-        return await call_newsapi(question)
+        write(f"[call_asknews] ❌ AskNews API error: {str(e)}, trying NewsData.io")
+        return await call_newsdata(question)
 
 # ========================================
 # AGENTIC SEARCH (for deep research)
