@@ -126,6 +126,9 @@ async def fetch_with_jina(url: str) -> dict:
     jina_url = f"https://r.jina.ai/{url}"
     
     try:
+        # Add small delay to avoid rate limiting on free tier
+        await asyncio.sleep(0.5)
+        
         write(f"[JINA FAILSAFE] Attempting to fetch: {url}")
         async with aiohttp.ClientSession() as session:
             timeout = aiohttp.ClientTimeout(total=30)
