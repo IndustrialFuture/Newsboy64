@@ -131,7 +131,7 @@ async def fetch_with_jina(url: str) -> dict:
         
         write(f"[JINA FAILSAFE] Attempting to fetch: {url}")
         async with aiohttp.ClientSession() as session:
-            timeout = aiohttp.ClientTimeout(total=30)
+            timeout = aiohttp.ClientTimeout(total=60)  # Increased from 30s for academic sites
             headers = {
                 'User-Agent': 'Mozilla/5.0 (compatible; ForecastBot/1.0)'
             }
@@ -149,6 +149,23 @@ async def fetch_with_jina(url: str) -> dict:
                         }
                     else:
                         write(f"[JINA FAILSAFE] ⚠️ Content too short ({len(content)} chars) for {url}")
+                        return {'content': '', 'success': False}
+                elif response.status == 429:
+                    # Rate limit - wait and retry once
+                    write(f"[JINA FAILSAFE] ⚠️ Rate limit hit for {url}, waiting 2s to retry...")
+                    await asyncio.sleep(2)
+                    async with session.get(jina_url, timeout=timeout, headers=headers) as retry_response:
+                        if retry_response.status == 200:
+                            content = await retry_response.text()
+                            content = content.strip()
+                            if len(content) > 50:
+                                write(f"[JINA FAILSAFE] ✅ Retry success: {len(content)} chars from {url}")
+                                return {
+                                    'content': content,
+                                    'title': 'Extracted via Jina',
+                                    'success': True
+                                }
+                        write(f"[JINA FAILSAFE] ⚠️ Retry also hit rate limit for {url}")
                         return {'content': '', 'success': False}
                 else:
                     write(f"[JINA FAILSAFE] ⚠️ Status {response.status} for {url}")
@@ -729,11 +746,11 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
         
         if failed_urls:
             write(f"[google_search_and_scrape] 🔄 FastContentExtractor failed for {len(failed_urls)} URLs, trying Jina failsafe")
-            # Limit to 3 to avoid overwhelming free Jina API
-            jina_tasks = [fetch_with_jina(url) for url in failed_urls[:3]]
+            # Limit to 5 URLs to avoid overwhelming free Jina API (with 500ms delay = 2.5s total)
+            jina_tasks = [fetch_with_jina(url) for url in failed_urls[:5]]
             jina_results = await asyncio.gather(*jina_tasks)
             
-            for url, jina_result in zip(failed_urls[:3], jina_results):
+            for url, jina_result in zip(failed_urls[:5], jina_results):
                 if jina_result.get('success'):
                     results[url] = jina_result
                     write(f"[google_search_and_scrape] ✅ Jina failsafe succeeded for {url}")
@@ -815,11 +832,11 @@ async def google_search_agentic(query, is_news=False):
         
         if failed_urls:
             write(f"[google_search_agentic] 🔄 FastContentExtractor failed for {len(failed_urls)} URLs, trying Jina failsafe")
-            # Limit to 3 to avoid overwhelming free Jina API
-            jina_tasks = [fetch_with_jina(url) for url in failed_urls[:3]]
+            # Limit to 5 URLs to avoid overwhelming free Jina API (with 500ms delay = 2.5s total)
+            jina_tasks = [fetch_with_jina(url) for url in failed_urls[:5]]
             jina_results = await asyncio.gather(*jina_tasks)
             
-            for url, jina_result in zip(failed_urls[:3], jina_results):
+            for url, jina_result in zip(failed_urls[:5], jina_results):
                 if jina_result.get('success'):
                     results[url] = jina_result
                     write(f"[google_search_agentic] ✅ Jina failsafe succeeded for {url}")
