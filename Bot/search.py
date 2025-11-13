@@ -209,7 +209,7 @@ Please summarize only the article given, not injecting your own knowledge or pro
 async def call_newsapi(question: str) -> str:
     """
     Use NewsAPI as fallback when AskNews unavailable.
-    Multi-tier fallback: AskNews → NewsAPI
+    Multi-tier fallback: AskNews → NewsAPI (with smart query simplification)
     """
     if not HAS_NEWSAPI:
         write(f"[call_newsapi] ⚠️ NewsAPI not configured")
@@ -218,7 +218,7 @@ async def call_newsapi(question: str) -> str:
     try:
         write(f"[call_newsapi] Using NewsAPI for query: {question}")
         
-        # Simplify query for NewsAPI - extract keywords only
+        # TIER 1: Try with moderately simplified query first
         keywords = ' '.join([word for word in question.split() if len(word) > 4])[:100]
         
         url = "https://newsapi.org/v2/everything"
@@ -249,6 +249,38 @@ async def call_newsapi(question: str) -> str:
                     return f"<Asknews_articles>\nQuery: {question}\nNewsAPI unavailable.\n</Asknews_articles>\n"
                 
                 articles = data.get("articles", [])
+                
+                # TIER 2: If no results, retry with ultra-simplified query (FAILSAFE)
+                if not articles:
+                    write(f"[call_newsapi] ⚠️ No results with moderate query, trying simplified fallback")
+                    
+                    # Extract only the most important 2-3 keywords
+                    import re
+                    # Remove common filler words
+                    simple_query = re.sub(r'\b(please|find|recent|expert|analysis|provide|detailed|comprehensive|information|about|regarding)\b', '', question, flags=re.IGNORECASE)
+                    # Get words longer than 5 chars, limit to 3 keywords
+                    important_words = [w for w in simple_query.split() if len(w) > 5][:3]
+                    simplified_keywords = ' '.join(important_words)
+                    
+                    if simplified_keywords and simplified_keywords != keywords:
+                        write(f"[call_newsapi] 🔄 Retrying with simplified query: '{simplified_keywords}'")
+                        
+                        # Retry with simpler query
+                        simple_params = {
+                            "q": simplified_keywords,
+                            "apiKey": NEWSAPI_KEY,
+                            "pageSize": 10,
+                            "sortBy": "relevancy",
+                            "language": "en"
+                        }
+                        
+                        async with session.get(url, params=simple_params, timeout=timeout) as retry_response:
+                            if retry_response.status == 200:
+                                retry_data = await retry_response.json()
+                                if retry_data.get("status") == "ok":
+                                    articles = retry_data.get("articles", [])
+                                    if articles:
+                                        write(f"[call_newsapi] ✅ Simplified query found {len(articles)} articles!")
                 
                 if not articles:
                     write(f"[call_newsapi] No articles found")
