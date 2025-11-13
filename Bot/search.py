@@ -688,7 +688,8 @@ async def google_search_and_scrape(query, is_news, question_details, date_before
         # STEP 2: NEW FAILSAFE - Check if FastContentExtractor failed, use Jina as fallback
         failed_urls = []
         for url in urls:
-            if url not in results or not results[url].get('content', '').strip():
+            content = results[url].get('content', '') if results[url] else ''
+            if url not in results or not content.strip():
                 failed_urls.append(url)
         
         if failed_urls:
@@ -773,7 +774,8 @@ async def google_search_agentic(query, is_news=False):
         # STEP 2: NEW FAILSAFE - Check if FastContentExtractor failed, use Jina as fallback
         failed_urls = []
         for url in urls:
-            if url not in results or not results[url].get('content', '').strip():
+            content = results[url].get('content', '') if results[url] else ''
+            if url not in results or not content.strip():
                 failed_urls.append(url)
         
         if failed_urls:
