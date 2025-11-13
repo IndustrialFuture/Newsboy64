@@ -124,7 +124,7 @@ def combine_forecasts(
     
     Inputs:
     - qobj: Question object
-    - panshul_result: {"PANSHUL_RESULTS": {...}} or None
+    - panshul_result: Raw Panshul result {"forecast": ..., "comment": ...} or None
     - method_results: {"KM": {...}, "BD": {...}, "EX": {...}} or None
     - evidence_packet: Evidence for THIS question from OUTPUT_B
     
@@ -135,9 +135,9 @@ def combine_forecasts(
     # Build consolidated results for prompt
     consolidated = {}
     
-    # Add Panshul
+    # Add Panshul - wrap it for the prompt
     if panshul_result:
-        consolidated["PANSHUL_RESULTS"] = panshul_result.get("PANSHUL_RESULTS", {})
+        consolidated["PANSHUL_RESULTS"] = panshul_result
     
     # Add method results
     for method_name, result in method_results.items():
@@ -211,7 +211,7 @@ def combine_forecasts(
     values = []
     
     if panshul_result:
-        val = extract_forecast_value(panshul_result, "PANSHUL")
+        val = extract_forecast_value({"PANSHUL_RESULTS": panshul_result}, "PANSHUL")
         if val is not None:
             values.append(("PANSHUL", val))
     
@@ -248,17 +248,16 @@ def combine_forecasts(
         "simple_average": sum(v for _, v in values) / len(values) if values else None
     }
     
-    # CRITICAL FIX: FORCE inject all method results into final_payload for artifact downloads
-    # Initialize if needed
+    # CRITICAL: Inject all method results into final_payload for artifact downloads
     if "all_method_results" not in final_payload:
         final_payload["all_method_results"] = {}
     
-    # FORCE inject Panshul
-    if panshul_result and "PANSHUL_RESULTS" in panshul_result:
-        final_payload["all_method_results"]["PANSHUL_RESULTS"] = panshul_result["PANSHUL_RESULTS"]
+    # Inject Panshul - wrap it properly for artifacts
+    if panshul_result:
+        final_payload["all_method_results"]["PANSHUL_RESULTS"] = panshul_result
         log(f"[COMBINER] ✅ Injected PANSHUL_RESULTS into final_payload")
     
-    # FORCE inject KM, BD
+    # Inject KM, BD
     for method_name in ["KM", "BD"]:
         if method_name in method_results:
             result_key = f"{method_name}_RESULTS"
@@ -266,7 +265,7 @@ def combine_forecasts(
                 final_payload["all_method_results"][result_key] = method_results[method_name][result_key]
                 log(f"[COMBINER] ✅ Injected {result_key} into final_payload")
     
-    # FORCE inject EX (special structure with MK + PL)
+    # Inject EX (special structure with MK + PL)
     if "EX" in method_results:
         ex_result = method_results["EX"]
         if "MK_RESULTS" in ex_result:
