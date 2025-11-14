@@ -44,7 +44,14 @@ jobs:
           print("✅ Saved anchor image to Diane-Nano.png")
           EOF
       
-      - name: Upload anchor image
+      - name: Check file exists
+        run: |
+          ls -lah Diane-Nano.png
+          file Diane-Nano.png
+      
+      - name: Upload anchor image as artifact
         uses: actions/upload-artifact@v4
         with:
           name: anchor-image
+          path: ./Diane-Nano.png
+          if-no-files-found: error
