@@ -208,7 +208,7 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images with proper base64 encoding.
+    Load all reference images with proper types.Image object.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
@@ -242,11 +242,11 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             else:
                 mime_type = 'image/png'
             
-            # Create an object with BOTH fields the error message asks for
-            image_data = {
-                'bytesBase64Encoded': base64_encoded,
-                'mimeType': mime_type
-            }
+            # Create proper types.Image object with snake_case fields
+            image_data = types.Image(
+                bytes_base64_encoded=base64_encoded,
+                mime_type=mime_type
+            )
             
             # Create the reference
             reference = types.VideoGenerationReferenceImage(
