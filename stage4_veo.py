@@ -15,13 +15,11 @@ import os
 import json
 import time
 import subprocess
-import base64
-import io
+import pickle
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
 from google.genai import types
-from PIL import Image
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -210,22 +208,32 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_anchor_image():
     """
-    Load the Nano Banana generated anchor image for image-to-video generation.
-    Returns: PIL Image object or None
+    Load the pickled Nano Banana Part object for image-to-video generation.
+    This preserves the SDK's internal format.
+    Returns: Image object from .as_image() or None
     """
-    image_path = "Diane-Nano.png"
+    pickle_path = "anchor_part.pkl"
     
-    if not os.path.exists(image_path):
-        log(f"[VEO] ⚠️ Anchor image not found: {image_path}")
+    if not os.path.exists(pickle_path):
+        log(f"[VEO] ⚠️ Anchor pickle not found: {pickle_path}")
         return None
     
     try:
-        log(f"[VEO] Loading anchor image: {image_path}")
-        pil_image = Image.open(image_path)
-        log(f"[VEO] ✅ Loaded anchor image")
-        return pil_image
+        log(f"[VEO] Loading pickled anchor Part: {pickle_path}")
+        
+        with open(pickle_path, "rb") as f:
+            part = pickle.load(f)
+        
+        # Use the Part's .as_image() method just like in the docs
+        anchor_image = part.as_image()
+        
+        log(f"[VEO] ✅ Loaded anchor image from pickled Part")
+        return anchor_image
+    
     except Exception as e:
-        log(f"[VEO] ❌ Failed to load anchor image: {e}")
+        log(f"[VEO] ❌ Failed to load pickled anchor: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ========================================
