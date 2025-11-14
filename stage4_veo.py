@@ -205,87 +205,43 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
     return veo_prompts
 
 # ========================================
-# STEP 3: LOAD REFERENCE IMAGES
+# STEP 3: LOAD ANCHOR IMAGE (FOR IMAGE-TO-VIDEO)
 # ========================================
 
-def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
+def load_anchor_image():
     """
-    Upload reference images and use the file URI directly.
-    Returns: List of VideoGenerationReferenceImage objects
+    Load the anchor image for image-to-video generation.
+    Returns: PIL Image object or None
     """
-    references = []
+    image_path = "Diane-Medium.png"
     
-    if not client:
-        log("[VEO] ❌ Gemini client not initialized")
-        return references
+    if not os.path.exists(image_path):
+        log(f"[VEO] ⚠️ Anchor image not found: {image_path}")
+        return None
     
-    image_paths = [
-        ("Diane-Medium.png", "anchor"),
-    ]
-    
-    for image_path, name in image_paths:
-        if not os.path.exists(image_path):
-            log(f"[VEO] ⚠️ Image not found: {image_path} - skipping")
-            continue
-        
-        try:
-            log(f"[VEO] Uploading reference image: {image_path}")
-            
-            # Upload the file
-            uploaded_file = client.files.upload(file=image_path)
-            log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
-            
-            # Wait for processing
-            while uploaded_file.state.name == "PROCESSING":
-                log(f"[VEO] ⏳ Waiting for file processing...")
-                time.sleep(2)
-                uploaded_file = client.files.get(name=uploaded_file.name)
-            
-            if uploaded_file.state.name == "FAILED":
-                log(f"[VEO] ❌ File processing failed for {image_path}")
-                continue
-            
-            log(f"[VEO] ✅ File processed: {uploaded_file.name}")
-            
-            # Use the file's URI directly - create a FileData object
-            file_data = types.FileData(
-                mime_type=uploaded_file.mime_type,
-                file_uri=uploaded_file.uri
-            )
-            
-            # Create a Part with the file data
-            part = types.Part(file_data=file_data)
-            
-            # Now try using part.file_data as the image
-            reference = types.VideoGenerationReferenceImage(
-                image=part.file_data,
-                reference_type="asset"
-            )
-            
-            references.append(reference)
-            log(f"[VEO] ✅ Loaded reference: {name}")
-            
-        except Exception as e:
-            log(f"[VEO] ❌ Failed to load {image_path}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    return references
+    try:
+        log(f"[VEO] Loading anchor image: {image_path}")
+        pil_image = Image.open(image_path)
+        log(f"[VEO] ✅ Loaded anchor image")
+        return pil_image
+    except Exception as e:
+        log(f"[VEO] ❌ Failed to load anchor image: {e}")
+        return None
 
 # ========================================
 # STEP 4: GENERATE SINGLE SHOT WITH RETRIES
 # ========================================
 
-def generate_shot_with_retries(shot_data: dict, all_references: List[types.VideoGenerationReferenceImage], q_id: str) -> Optional[str]:
+def generate_shot_with_retries(shot_data: dict, anchor_image, q_id: str) -> Optional[str]:
     """
     Generate a single shot with retry logic and alternate prompts.
+    Uses image-to-video for anchor shots to ensure consistency.
     
     Returns: Path to generated MP4 file, or None if all attempts failed
     """
     shot_num = shot_data.get("shot", 0)
     visual_prompts = shot_data.get("visual_prompts", [])
-    use_reference = shot_data.get("use_reference_image", False)
+    use_anchor = shot_data.get("use_reference_image", False)
     
     if not visual_prompts:
         log(f"[VEO] ⚠️ Shot {shot_num} has no visual prompts - skipping")
@@ -312,15 +268,13 @@ def generate_shot_with_retries(shot_data: dict, all_references: List[types.Video
             try:
                 log(f"[VEO] Submitting generation request for shot {shot_num}...")
                 
-                # Use reference images if requested AND available
-                if use_reference and all_references:
-                    log(f"[VEO] Using {len(all_references)} reference image(s) for shot {shot_num}")
+                # Use image-to-video for anchor shots (ensures consistency)
+                if use_anchor and anchor_image:
+                    log(f"[VEO] Using image-to-video with anchor image for shot {shot_num}")
                     operation = client.models.generate_videos(
                         model=VEO_MODEL,
                         prompt=prompt_text,
-                        config=types.GenerateVideosConfig(
-                            reference_images=all_references,
-                        ),
+                        image=anchor_image,  # Use anchor as starting frame
                     )
                 else:
                     # Text-to-video only
@@ -454,17 +408,17 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
     if not veo_prompts:
         return None
     
-    # Step 3: Load reference images (once per question)
-    all_references = load_reference_images()
-    if not all_references:
-        log("[VEO] ⚠️ No reference images loaded - anchor may be inconsistent")
+    # Step 3: Load anchor image (once per question)
+    anchor_image = load_anchor_image()
+    if not anchor_image:
+        log("[VEO] ⚠️ No anchor image loaded - anchor shots may be inconsistent")
     
     # Step 4: Generate each shot
     shots = veo_prompts.get("shots", [])
     generated_shots = []
     
     for shot_data in shots:
-        shot_file = generate_shot_with_retries(shot_data, all_references, q_id)
+        shot_file = generate_shot_with_retries(shot_data, anchor_image, q_id)
         if shot_file:
             generated_shots.append(shot_file)
         else:
