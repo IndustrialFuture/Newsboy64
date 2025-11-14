@@ -1,0 +1,53 @@
+name: Generate Anchor Image
+
+on:
+  workflow_dispatch:  # Manual trigger only
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install google-genai pillow
+      
+      - name: Generate anchor image
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python - <<EOF
+          from google import genai
+          import os
+          
+          client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+          
+          anchor_prompt = """Professional blonde female news anchor at broadcast desk. 
+          Medium shot, direct eye contact with camera, serious authoritative expression.
+          Business professional attire, studio lighting, clean modern news set background.
+          Photorealistic, 4K quality, broadcast television aesthetic."""
+          
+          image_response = client.models.generate_content(
+              model="gemini-2.5-flash-image",
+              contents=anchor_prompt,
+              config={"response_modalities":['IMAGE']}
+          )
+          
+          anchor_image = image_response.parts[0].as_image()
+          anchor_image.save("Diane-Nano.png")
+          print("✅ Saved anchor image to Diane-Nano.png")
+          EOF
+      
+      - name: Commit and push anchor image
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add Diane-Nano.png
+          git commit -m "Add Nano Banana generated anchor image"
+          git push
