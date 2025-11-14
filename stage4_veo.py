@@ -9,8 +9,6 @@ Flow:
 2. PROMPT_REPORTER2: Script → Veo-formatted prompts with visuals
 3. Generate each shot with Veo (with retries + alternates)
 4. Concatenate shots into final video
-
-NOTE: Currently uses text-to-video only. Image-to-video disabled temporarily.
 """
 
 import os
@@ -21,6 +19,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
 from google.genai import types
+from PIL import Image
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -36,6 +35,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 # Veo model - CORRECT model name from docs
 VEO_MODEL = "veo-3.1-generate-preview"
+
+# Reference image path (in repo)
+REFERENCE_IMAGE_PATH = "Diane-Medium.png"
 
 # Initialize Gemini client
 client = None
@@ -204,10 +206,42 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
     return veo_prompts
 
 # ========================================
-# STEP 3: GENERATE SINGLE SHOT WITH RETRIES
+# STEP 3: LOAD REFERENCE IMAGE
 # ========================================
 
-def generate_shot_with_retries(shot_data: dict, q_id: str) -> Optional[str]:
+def load_reference_image() -> Optional[types.VideoGenerationReferenceImage]:
+    """
+    Load reference image as VideoGenerationReferenceImage.
+    Returns: VideoGenerationReferenceImage object for consistent character appearance
+    """
+    if not os.path.exists(REFERENCE_IMAGE_PATH):
+        log(f"[VEO] ❌ Reference image not found: {REFERENCE_IMAGE_PATH}")
+        return None
+    
+    try:
+        log(f"[VEO] Loading reference image: {REFERENCE_IMAGE_PATH}")
+        pil_image = Image.open(REFERENCE_IMAGE_PATH)
+        log(f"[VEO] ✅ Loaded image: {pil_image.size} {pil_image.mode}")
+        
+        # Create VideoGenerationReferenceImage for character consistency
+        anchor_reference = types.VideoGenerationReferenceImage(
+            image=pil_image,
+            reference_type="asset"  # Preserves the person's appearance
+        )
+        log(f"[VEO] ✅ Created reference image object")
+        
+        return anchor_reference
+    except Exception as e:
+        log(f"[VEO] ❌ Failed to load image: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+# ========================================
+# STEP 4: GENERATE SINGLE SHOT WITH RETRIES
+# ========================================
+
+def generate_shot_with_retries(shot_data: dict, anchor_reference: Optional[types.VideoGenerationReferenceImage], q_id: str) -> Optional[str]:
     """
     Generate a single shot with retry logic and alternate prompts.
     
@@ -215,6 +249,7 @@ def generate_shot_with_retries(shot_data: dict, q_id: str) -> Optional[str]:
     """
     shot_num = shot_data.get("shot", 0)
     visual_prompts = shot_data.get("visual_prompts", [])
+    use_reference = shot_data.get("use_reference_image", False)
     
     if not visual_prompts:
         log(f"[VEO] ⚠️ Shot {shot_num} has no visual prompts - skipping")
@@ -241,11 +276,22 @@ def generate_shot_with_retries(shot_data: dict, q_id: str) -> Optional[str]:
             try:
                 log(f"[VEO] Submitting generation request for shot {shot_num}...")
                 
-                # SIMPLIFIED: Text-to-video only (no reference image)
-                operation = client.models.generate_videos(
-                    model=VEO_MODEL,
-                    prompt=prompt_text,
-                )
+                # Use reference image if requested AND available
+                if use_reference and anchor_reference:
+                    log(f"[VEO] Using anchor reference image for shot {shot_num}")
+                    operation = client.models.generate_videos(
+                        model=VEO_MODEL,
+                        prompt=prompt_text,
+                        config=types.GenerateVideosConfig(
+                            reference_images=[anchor_reference],
+                        ),
+                    )
+                else:
+                    # Text-to-video only
+                    operation = client.models.generate_videos(
+                        model=VEO_MODEL,
+                        prompt=prompt_text,
+                    )
                 
                 # Poll for completion (from docs)
                 log(f"[VEO] ⏳ Waiting for shot {shot_num} to generate (2-5 minutes)...")
@@ -297,7 +343,7 @@ def generate_shot_with_retries(shot_data: dict, q_id: str) -> Optional[str]:
     return None
 
 # ========================================
-# STEP 4: CONCATENATE VIDEOS
+# STEP 5: CONCATENATE VIDEOS
 # ========================================
 
 def concatenate_videos(shot_files: List[str], output_filename: str) -> Optional[str]:
@@ -372,14 +418,17 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
     if not veo_prompts:
         return None
     
-    # Step 3: Generate each shot (text-to-video only for now)
+    # Step 3: Load reference image (once per question)
+    anchor_reference = load_reference_image()
+    if not anchor_reference:
+        log("[VEO] ⚠️ Proceeding without reference image - anchor may be inconsistent")
+    
+    # Step 4: Generate each shot
     shots = veo_prompts.get("shots", [])
     generated_shots = []
     
-    log("[VEO] ⚠️ NOTE: Using text-to-video only (reference image disabled)")
-    
     for shot_data in shots:
-        shot_file = generate_shot_with_retries(shot_data, q_id)
+        shot_file = generate_shot_with_retries(shot_data, anchor_reference, q_id)
         if shot_file:
             generated_shots.append(shot_file)
         else:
@@ -389,7 +438,7 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
         log(f"[VEO] ❌ No shots generated for Q {q_id}")
         return None
     
-    # Step 4: Concatenate shots
+    # Step 5: Concatenate shots
     final_video = concatenate_videos(generated_shots, f"video_q{q_id}.mp4")
     
     if final_video:
@@ -443,3 +492,5 @@ def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, str]]:
 # ========================================
 # END OF STAGE4_VEO
 # ========================================
+
+Pillow
