@@ -233,7 +233,7 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             log(f"[VEO] Uploading reference image: {image_path}")
             
             # Upload the file to Google's File API (like the web UI does)
-            uploaded_file = client.files.upload(path=image_path)
+            uploaded_file = client.files.upload(file=image_path)
             log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
             
             # Wait for processing
