@@ -15,6 +15,8 @@ import os
 import json
 import time
 import subprocess
+import base64
+import io
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
@@ -208,7 +210,7 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images using PIL and proper format.
+    Load all reference images with manual base64 conversion.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
@@ -225,12 +227,26 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
         try:
             log(f"[VEO] Loading reference image: {image_path}")
             
-            # Use PIL to load the image (same way Veo examples do internally)
+            # Open with PIL
             pil_image = Image.open(image_path)
             
-            # Create the reference using PIL image directly
+            # Convert to bytes
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='PNG')
+            image_bytes = buffer.getvalue()
+            
+            # Base64 encode
+            base64_string = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Create a custom dict that mimics what the API expects
+            image_dict = {
+                'bytesBase64Encoded': base64_string,
+                'mimeType': 'image/png'
+            }
+            
+            # Try passing the dict directly to VideoGenerationReferenceImage
             reference = types.VideoGenerationReferenceImage(
-                image=pil_image,
+                image=image_dict,
                 reference_type="asset"
             )
             
