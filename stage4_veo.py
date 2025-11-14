@@ -210,8 +210,7 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Upload reference images to File API, then use those for Veo.
-    This mimics what the web UI does.
+    Upload reference images, then download and format them properly.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
@@ -232,7 +231,7 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
         try:
             log(f"[VEO] Uploading reference image: {image_path}")
             
-            # Upload the file to Google's File API (like the web UI does)
+            # Upload the file
             uploaded_file = client.files.upload(file=image_path)
             log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
             
@@ -248,10 +247,20 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             
             log(f"[VEO] ✅ File processed: {uploaded_file.name}")
             
-            # Now try using the uploaded file as a reference
-            # The uploaded file should have the right format
+            # Download it back to get the bytes
+            downloaded_bytes = client.files.download(file=uploaded_file)
+            
+            # Create proper blob and part
+            blob = types.Blob(
+                mime_type=uploaded_file.mime_type or "image/png",
+                data=downloaded_bytes
+            )
+            
+            part = types.Part(inline_data=blob)
+            
+            # Create reference with the part
             reference = types.VideoGenerationReferenceImage(
-                image=uploaded_file,
+                image=part.inline_data,
                 reference_type="asset"
             )
             
