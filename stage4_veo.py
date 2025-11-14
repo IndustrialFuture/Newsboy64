@@ -15,6 +15,7 @@ import os
 import json
 import time
 import subprocess
+import base64
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
@@ -207,14 +208,10 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images via File API upload.
+    Load all reference images with proper base64 encoding.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
-    
-    if not client:
-        log("[VEO] ❌ Gemini client not initialized")
-        return references
     
     image_paths = [
         ("Diane-Medium.png", "anchor"),
@@ -228,24 +225,32 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             continue
         
         try:
-            log(f"[VEO] Uploading reference image via File API: {image_path}")
+            log(f"[VEO] Loading reference image: {image_path}")
             
-            # Upload to File API (like video upload example in docs)
-            uploaded_file = client.files.upload(file=image_path)
-            log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
+            # Read the file
+            with open(image_path, 'rb') as f:
+                image_bytes = f.read()
             
-            # Wait for processing
-            while uploaded_file.state.name == "PROCESSING":
-                time.sleep(1)
-                uploaded_file = client.files.get(name=uploaded_file.name)
+            # Base64 encode it
+            base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
             
-            if uploaded_file.state.name == "FAILED":
-                log(f"[VEO] ❌ File processing failed: {image_path}")
-                continue
+            # Determine mime type
+            if image_path.lower().endswith('.png'):
+                mime_type = 'image/png'
+            elif image_path.lower().endswith(('.jpg', '.jpeg')):
+                mime_type = 'image/jpeg'
+            else:
+                mime_type = 'image/png'
             
-            # Create reference using the uploaded file
+            # Create an object with BOTH fields the error message asks for
+            image_data = {
+                'bytesBase64Encoded': base64_encoded,
+                'mimeType': mime_type
+            }
+            
+            # Create the reference
             reference = types.VideoGenerationReferenceImage(
-                image=uploaded_file,  # Use the uploaded file object directly
+                image=image_data,
                 reference_type="asset"
             )
             
