@@ -111,6 +111,8 @@ jobs:
           PROMPT_EX_PT2: ${{ secrets.PROMPT_EX_PT2 }}
           PROMPT_FINAL_COMBINER: ${{ secrets.PROMPT_FINAL_COMBINER }}
           PROMPT_REPORTER: ${{ secrets.PROMPT_REPORTER }}
+          PROMPT_REPORTER1: ${{ secrets.PROMPT_REPORTER1 }}
+          PROMPT_REPORTER2: ${{ secrets.PROMPT_REPORTER2 }}
           
           # Pipeline Configuration
           MODE: ${{ steps.mode.outputs.mode }}
