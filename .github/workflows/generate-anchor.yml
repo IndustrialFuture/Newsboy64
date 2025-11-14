@@ -26,7 +26,7 @@ jobs:
           
           client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
           
-          anchor_prompt = """16:9 widescreen professional blonde female news anchor at broadcast desk. Medium tight close-up shot with anchor positioned on left third of screen, leaving graphic space over right shoulder. Direct eye contact with camera, serious authoritative expression. Business professional attire, studio lighting, clean modern news set background. Static shot with no camera movement. No text, no chyrons, no graphics, no overlays. Clean broadcast frame. Photorealistic, 4K quality, broadcast television aesthetic."""
+          anchor_prompt = """A professional blonde female news anchor at a broadcast desk, photographed in 16:9 aspect ratio with no letterboxing or black bars. Medium close-up shot with anchor positioned on left third of frame, leaving empty space over right shoulder for graphics. Direct eye contact with camera, serious authoritative expression. Business professional attire. Modern news studio with soft lighting, blue and neutral tones in background. Static composition, no camera movement. No text overlays, no chyrons, no graphics, clean frame. High quality broadcast photography, photorealistic."""
           
           image_response = client.models.generate_content(
               model="gemini-2.5-flash-image",
