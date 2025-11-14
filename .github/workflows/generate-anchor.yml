@@ -28,7 +28,7 @@ jobs:
           
           client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
           
-          anchor_prompt = """Professional blonde female news anchor at broadcast desk. 
+          anchor_prompt = """Professional female news anchor at broadcast desk. 
           Medium shot, direct eye contact with camera, serious authoritative expression.
           Business professional attire, studio lighting, clean modern news set background.
           Photorealistic, 4K quality, broadcast television aesthetic."""
@@ -44,8 +44,7 @@ jobs:
           print("✅ Saved anchor image to Diane-Nano.png")
           EOF
       
-        - name: Upload anchor image
+      - name: Upload anchor image
         uses: actions/upload-artifact@v4
         with:
           name: anchor-image
-          path: Diane-Nano.png
