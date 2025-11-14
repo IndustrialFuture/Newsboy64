@@ -210,10 +210,15 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images using proper SDK types.
+    Upload reference images to File API, then use those for Veo.
+    This mimics what the web UI does.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
+    
+    if not client:
+        log("[VEO] ❌ Gemini client not initialized")
+        return references
     
     image_paths = [
         ("Diane-Medium.png", "anchor"),
@@ -225,33 +230,28 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             continue
         
         try:
-            log(f"[VEO] Loading reference image: {image_path}")
+            log(f"[VEO] Uploading reference image: {image_path}")
             
-            # Open with PIL
-            pil_image = Image.open(image_path)
+            # Upload the file to Google's File API (like the web UI does)
+            uploaded_file = client.files.upload(path=image_path)
+            log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
             
-            # Convert to bytes
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format='PNG')
-            image_bytes = buffer.getvalue()
+            # Wait for processing
+            while uploaded_file.state.name == "PROCESSING":
+                log(f"[VEO] ⏳ Waiting for file processing...")
+                time.sleep(2)
+                uploaded_file = client.files.get(name=uploaded_file.name)
             
-            # Base64 encode
-            base64_string = base64.b64encode(image_bytes).decode('utf-8')
+            if uploaded_file.state.name == "FAILED":
+                log(f"[VEO] ❌ File processing failed for {image_path}")
+                continue
             
-            # Create proper Blob type (this is what the SDK uses internally)
-            blob = types.Blob(
-                mime_type='image/png',
-                data=image_bytes  # Use raw bytes, not base64
-            )
+            log(f"[VEO] ✅ File processed: {uploaded_file.name}")
             
-            # Create Part with inline data
-            part = types.Part(
-                inline_data=blob
-            )
-            
-            # Try passing the Part to VideoGenerationReferenceImage
+            # Now try using the uploaded file as a reference
+            # The uploaded file should have the right format
             reference = types.VideoGenerationReferenceImage(
-                image=part,
+                image=uploaded_file,
                 reference_type="asset"
             )
             
