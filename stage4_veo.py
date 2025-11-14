@@ -15,11 +15,11 @@ import os
 import json
 import time
 import subprocess
-import base64
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
 from google.genai import types
+from PIL import Image
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -208,15 +208,13 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images with proper types.Image object.
+    Load all reference images using PIL and proper format.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
     
     image_paths = [
         ("Diane-Medium.png", "anchor"),
-        # ("capitol-exterior.png", "capitol"),  # Uncomment when you add this
-        # ("oval-office.png", "oval_office"),   # Uncomment when you add this
     ]
     
     for image_path, name in image_paths:
@@ -227,30 +225,12 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
         try:
             log(f"[VEO] Loading reference image: {image_path}")
             
-            # Read the file
-            with open(image_path, 'rb') as f:
-                image_bytes = f.read()
+            # Use PIL to load the image (same way Veo examples do internally)
+            pil_image = Image.open(image_path)
             
-            # Base64 encode it
-            base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-            
-            # Determine mime type
-            if image_path.lower().endswith('.png'):
-                mime_type = 'image/png'
-            elif image_path.lower().endswith(('.jpg', '.jpeg')):
-                mime_type = 'image/jpeg'
-            else:
-                mime_type = 'image/png'
-            
-            # Create proper types.Image object with snake_case fields
-            image_data = types.Image(
-                bytes_base64_encoded=base64_encoded,
-                mime_type=mime_type
-            )
-            
-            # Create the reference
+            # Create the reference using PIL image directly
             reference = types.VideoGenerationReferenceImage(
-                image=image_data,
+                image=pil_image,
                 reference_type="asset"
             )
             
