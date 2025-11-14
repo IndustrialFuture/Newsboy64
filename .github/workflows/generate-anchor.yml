@@ -44,10 +44,8 @@ jobs:
           print("✅ Saved anchor image to Diane-Nano.png")
           EOF
       
-      - name: Commit and push anchor image
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add Diane-Nano.png
-          git commit -m "Add Nano Banana generated anchor image"
-          git push
+        - name: Upload anchor image
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-image
+          path: Diane-Nano.png
