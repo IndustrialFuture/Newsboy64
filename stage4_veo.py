@@ -15,6 +15,8 @@ import os
 import json
 import time
 import subprocess
+import base64
+import io
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
@@ -35,9 +37,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 # Veo model - CORRECT model name from docs
 VEO_MODEL = "veo-3.1-generate-preview"
-
-# Reference image path (in repo)
-REFERENCE_IMAGE_PATH = "Diane-Medium.png"
 
 # Initialize Gemini client
 client = None
@@ -206,42 +205,70 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
     return veo_prompts
 
 # ========================================
-# STEP 3: LOAD REFERENCE IMAGE
+# STEP 3: LOAD REFERENCE IMAGES
 # ========================================
 
-def load_reference_image() -> Optional[types.VideoGenerationReferenceImage]:
+def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load reference image as VideoGenerationReferenceImage.
-    Returns: VideoGenerationReferenceImage object for consistent character appearance
+    Load all reference images.
+    Returns: List of VideoGenerationReferenceImage objects
     """
-    if not os.path.exists(REFERENCE_IMAGE_PATH):
-        log(f"[VEO] ❌ Reference image not found: {REFERENCE_IMAGE_PATH}")
-        return None
+    references = []
     
-    try:
-        log(f"[VEO] Loading reference image: {REFERENCE_IMAGE_PATH}")
-        pil_image = Image.open(REFERENCE_IMAGE_PATH)
-        log(f"[VEO] ✅ Loaded image: {pil_image.size} {pil_image.mode}")
+    # List of images to load (add more here as needed)
+    image_paths = [
+        ("Diane-Medium.png", "anchor"),
+        # ("capitol-exterior.png", "capitol"),  # Uncomment when you add this
+        # ("oval-office.png", "oval_office"),   # Uncomment when you add this
+    ]
+    
+    for image_path, name in image_paths:
+        if not os.path.exists(image_path):
+            log(f"[VEO] ⚠️ Image not found: {image_path} - skipping")
+            continue
         
-        # Create VideoGenerationReferenceImage for character consistency
-        anchor_reference = types.VideoGenerationReferenceImage(
-            image=pil_image,
-            reference_type="asset"  # Preserves the person's appearance
-        )
-        log(f"[VEO] ✅ Created reference image object")
-        
-        return anchor_reference
-    except Exception as e:
-        log(f"[VEO] ❌ Failed to load image: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        try:
+            log(f"[VEO] Loading reference image: {image_path}")
+            
+            # Load PIL Image
+            pil_image = Image.open(image_path)
+            
+            # Convert to RGB if RGBA
+            if pil_image.mode == 'RGBA':
+                pil_image = pil_image.convert('RGB')
+            
+            # Convert to base64
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='JPEG')
+            image_bytes = buffer.getvalue()
+            base64_image = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Create blob
+            image_blob = types.Blob(
+                mime_type='image/jpeg',
+                data=base64_image
+            )
+            
+            # Create reference
+            reference = types.VideoGenerationReferenceImage(
+                image=image_blob,
+                reference_type="asset"
+            )
+            
+            references.append(reference)
+            log(f"[VEO] ✅ Loaded reference: {name}")
+            
+        except Exception as e:
+            log(f"[VEO] ❌ Failed to load {image_path}: {e}")
+            continue
+    
+    return references
 
 # ========================================
 # STEP 4: GENERATE SINGLE SHOT WITH RETRIES
 # ========================================
 
-def generate_shot_with_retries(shot_data: dict, anchor_reference: Optional[types.VideoGenerationReferenceImage], q_id: str) -> Optional[str]:
+def generate_shot_with_retries(shot_data: dict, all_references: List[types.VideoGenerationReferenceImage], q_id: str) -> Optional[str]:
     """
     Generate a single shot with retry logic and alternate prompts.
     
@@ -276,14 +303,14 @@ def generate_shot_with_retries(shot_data: dict, anchor_reference: Optional[types
             try:
                 log(f"[VEO] Submitting generation request for shot {shot_num}...")
                 
-                # Use reference image if requested AND available
-                if use_reference and anchor_reference:
-                    log(f"[VEO] Using anchor reference image for shot {shot_num}")
+                # Use reference images if requested AND available
+                if use_reference and all_references:
+                    log(f"[VEO] Using {len(all_references)} reference image(s) for shot {shot_num}")
                     operation = client.models.generate_videos(
                         model=VEO_MODEL,
                         prompt=prompt_text,
                         config=types.GenerateVideosConfig(
-                            reference_images=[anchor_reference],
+                            reference_images=all_references,
                         ),
                     )
                 else:
@@ -418,17 +445,17 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
     if not veo_prompts:
         return None
     
-    # Step 3: Load reference image (once per question)
-    anchor_reference = load_reference_image()
-    if not anchor_reference:
-        log("[VEO] ⚠️ Proceeding without reference image - anchor may be inconsistent")
+    # Step 3: Load reference images (once per question)
+    all_references = load_reference_images()
+    if not all_references:
+        log("[VEO] ⚠️ No reference images loaded - anchor may be inconsistent")
     
     # Step 4: Generate each shot
     shots = veo_prompts.get("shots", [])
     generated_shots = []
     
     for shot_data in shots:
-        shot_file = generate_shot_with_retries(shot_data, anchor_reference, q_id)
+        shot_file = generate_shot_with_retries(shot_data, all_references, q_id)
         if shot_file:
             generated_shots.append(shot_file)
         else:
@@ -492,4 +519,3 @@ def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, str]]:
 # ========================================
 # END OF STAGE4_VEO
 # ========================================
-
