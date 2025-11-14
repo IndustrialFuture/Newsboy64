@@ -15,10 +15,12 @@ import os
 import json
 import time
 import subprocess
+import io
 from typing import Dict, List, Optional
 from pathlib import Path
-from google import genai  # ← CORRECT NEW LIBRARY
+from google import genai
 from google.genai import types
+from PIL import Image
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -205,29 +207,25 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
     return veo_prompts
 
 # ========================================
-# STEP 3: UPLOAD REFERENCE IMAGE
+# STEP 3: LOAD REFERENCE IMAGE
 # ========================================
 
-def upload_reference_image() -> Optional[object]:
+def load_reference_image() -> Optional[Image.Image]:
     """
-    Upload reference image to Gemini File API.
-    Returns: uploaded file object for use in generation requests
+    Load reference image as PIL Image.
+    Returns: PIL Image object for use in generation requests
     """
-    if not client:
-        log("[VEO] ❌ Gemini client not initialized")
-        return None
-    
     if not os.path.exists(REFERENCE_IMAGE_PATH):
         log(f"[VEO] ❌ Reference image not found: {REFERENCE_IMAGE_PATH}")
         return None
     
     try:
-        log(f"[VEO] Uploading reference image: {REFERENCE_IMAGE_PATH}")
-        uploaded_file = client.files.upload(file=REFERENCE_IMAGE_PATH)
-        log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
-        return uploaded_file
+        log(f"[VEO] Loading reference image: {REFERENCE_IMAGE_PATH}")
+        pil_image = Image.open(REFERENCE_IMAGE_PATH)
+        log(f"[VEO] ✅ Loaded image: {pil_image.size} {pil_image.mode}")
+        return pil_image
     except Exception as e:
-        log(f"[VEO] ❌ Failed to upload image: {e}")
+        log(f"[VEO] ❌ Failed to load image: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -236,7 +234,7 @@ def upload_reference_image() -> Optional[object]:
 # STEP 4: GENERATE SINGLE SHOT WITH RETRIES
 # ========================================
 
-def generate_shot_with_retries(shot_data: dict, reference_image: Optional[object], q_id: str) -> Optional[str]:
+def generate_shot_with_retries(shot_data: dict, reference_image: Optional[Image.Image], q_id: str) -> Optional[str]:
     """
     Generate a single shot with retry logic and alternate prompts.
     
@@ -273,7 +271,7 @@ def generate_shot_with_retries(shot_data: dict, reference_image: Optional[object
                 
                 # Call Veo API - CORRECT METHOD from docs
                 if use_image and reference_image:
-                    # With reference image
+                    # With reference image - use PIL Image directly
                     operation = client.models.generate_videos(
                         model=VEO_MODEL,
                         prompt=prompt_text,
@@ -411,8 +409,8 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
     if not veo_prompts:
         return None
     
-    # Step 3: Upload reference image (once per question)
-    reference_image = upload_reference_image()
+    # Step 3: Load reference image (once per question)
+    reference_image = load_reference_image()
     if not reference_image:
         log("[VEO] ⚠️ Proceeding without reference image")
     
@@ -485,3 +483,9 @@ def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, str]]:
 # ========================================
 # END OF STAGE4_VEO
 # ========================================
+```
+
+**Also update requirements.txt to include Pillow:**
+```
+google-genai
+Pillow
