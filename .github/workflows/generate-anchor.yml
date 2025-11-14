@@ -1,8 +1,6 @@
 name: Generate Anchor Image
-
 on:
   workflow_dispatch:  # Manual trigger only
-
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -28,10 +26,7 @@ jobs:
           
           client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
           
-          anchor_prompt = """Professional blonde female news anchor at broadcast desk. 
-          Medium shot, direct eye contact with camera, serious authoritative expression.
-          Business professional attire, studio lighting, clean modern news set background.
-          Photorealistic, 4K quality, broadcast television aesthetic."""
+          anchor_prompt = """Professional blonde female news anchor at broadcast desk. Medium close-up shot with anchor positioned on left third of screen, leaving graphic space over right shoulder. Direct eye contact with camera, serious authoritative expression. Business professional attire, studio lighting, clean modern news set background. Static shot with no camera movement. Photorealistic, 4K quality, broadcast television aesthetic."""
           
           image_response = client.models.generate_content(
               model="gemini-2.5-flash-image",
