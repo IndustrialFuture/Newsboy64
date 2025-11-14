@@ -210,10 +210,10 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_anchor_image():
     """
-    Load the anchor image for image-to-video generation.
+    Load the Nano Banana generated anchor image for image-to-video generation.
     Returns: PIL Image object or None
     """
-    image_path = "Diane-Medium.png"
+    image_path = "Diane-Nano.png"
     
     if not os.path.exists(image_path):
         log(f"[VEO] ⚠️ Anchor image not found: {image_path}")
