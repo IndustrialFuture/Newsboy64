@@ -483,9 +483,3 @@ def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, str]]:
 # ========================================
 # END OF STAGE4_VEO
 # ========================================
-```
-
-**Also update requirements.txt to include Pillow:**
-```
-google-genai
-Pillow
