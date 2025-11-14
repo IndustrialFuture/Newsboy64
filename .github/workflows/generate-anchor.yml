@@ -1,6 +1,8 @@
 name: Generate Anchor Image
+
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:
+
 jobs:
   generate:
     runs-on: ubuntu-latest
@@ -16,17 +18,18 @@ jobs:
         run: |
           pip install google-genai pillow
       
-      - name: Generate anchor image
+      - name: Generate and save anchor
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python - <<EOF
           from google import genai
           import os
+          import pickle
           
           client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
           
-          anchor_prompt = """A professional blonde female news anchor at a broadcast desk, photographed in 16:9 aspect ratio with no letterboxing or black bars. Medium close-up shot with anchor positioned on left third of frame, leaving empty space over right shoulder for graphics. Direct eye contact with camera, serious authoritative expression. Business professional attire. Modern news studio with soft lighting, blue and neutral tones in background. Static composition, no camera movement. No text overlays, no chyrons, no graphics, clean frame. High quality broadcast photography, photorealistic."""
+          anchor_prompt = """16:9 widescreen professional blonde female news anchor at broadcast desk. Medium close-up shot with anchor positioned on left third of frame, leaving empty space over right shoulder for graphics. Direct eye contact with camera, serious authoritative expression. Business professional attire. Modern news studio with soft lighting, blue and neutral tones in background. Static composition, no camera movement. No text overlays, no chyrons, no graphics, clean frame. High quality broadcast photography, photorealistic."""
           
           image_response = client.models.generate_content(
               model="gemini-2.5-flash-image",
@@ -34,19 +37,22 @@ jobs:
               config={"response_modalities":['IMAGE']}
           )
           
+          # Save the entire Part object with pickle
+          with open("anchor_part.pkl", "wb") as f:
+              pickle.dump(image_response.parts[0], f)
+          
+          # Also save as PNG for reference
           anchor_image = image_response.parts[0].as_image()
           anchor_image.save("Diane-Nano.png")
-          print("✅ Saved anchor image to Diane-Nano.png")
+          
+          print("✅ Saved anchor Part object and PNG")
           EOF
       
-      - name: Check file exists
-        run: |
-          ls -lah Diane-Nano.png
-          file Diane-Nano.png
-      
-      - name: Upload anchor image as artifact
+      - name: Upload anchor files
         uses: actions/upload-artifact@v4
         with:
-          name: anchor-image
-          path: ./Diane-Nano.png
+          name: anchor-files
+          path: |
+            anchor_part.pkl
+            Diane-Nano.png
           if-no-files-found: error
