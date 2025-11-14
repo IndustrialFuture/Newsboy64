@@ -15,13 +15,10 @@ import os
 import json
 import time
 import subprocess
-import base64
-import io
 from typing import Dict, List, Optional
 from pathlib import Path
 from google import genai
 from google.genai import types
-from PIL import Image
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -215,7 +212,7 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
     references = []
     
-    # List of images to load (add more here as needed)
+    # List of images to load
     image_paths = [
         ("Diane-Medium.png", "anchor"),
         # ("capitol-exterior.png", "capitol"),  # Uncomment when you add this
@@ -230,28 +227,29 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
         try:
             log(f"[VEO] Loading reference image: {image_path}")
             
-            # Load PIL Image
-            pil_image = Image.open(image_path)
+            # Read raw bytes
+            with open(image_path, 'rb') as f:
+                image_bytes = f.read()
             
-            # Convert to RGB if RGBA
-            if pil_image.mode == 'RGBA':
-                pil_image = pil_image.convert('RGB')
+            # Determine mime type
+            if image_path.lower().endswith('.png'):
+                mime_type = 'image/png'
+            elif image_path.lower().endswith(('.jpg', '.jpeg')):
+                mime_type = 'image/jpeg'
+            else:
+                mime_type = 'image/png'
             
-            # Convert to base64
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format='JPEG')
-            image_bytes = buffer.getvalue()
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
-            
-            # Create blob
-            image_blob = types.Blob(
-                mime_type='image/jpeg',
-                data=base64_image
+            # Create Part with inline_data
+            image_part = types.Part(
+                inline_data=types.Blob(
+                    mime_type=mime_type,
+                    data=image_bytes
+                )
             )
             
-            # Create reference
+            # Create reference - using the Part's image data
             reference = types.VideoGenerationReferenceImage(
-                image=image_blob,
+                image=image_part.inline_data,
                 reference_type="asset"
             )
             
@@ -260,6 +258,8 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             
         except Exception as e:
             log(f"[VEO] ❌ Failed to load {image_path}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     return references
