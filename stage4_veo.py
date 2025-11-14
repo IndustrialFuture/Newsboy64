@@ -210,7 +210,7 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images with manual base64 conversion.
+    Load all reference images using proper SDK types.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
@@ -238,15 +238,20 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             # Base64 encode
             base64_string = base64.b64encode(image_bytes).decode('utf-8')
             
-            # Create a custom dict that mimics what the API expects
-            image_dict = {
-                'bytesBase64Encoded': base64_string,
-                'mimeType': 'image/png'
-            }
+            # Create proper Blob type (this is what the SDK uses internally)
+            blob = types.Blob(
+                mime_type='image/png',
+                data=image_bytes  # Use raw bytes, not base64
+            )
             
-            # Try passing the dict directly to VideoGenerationReferenceImage
+            # Create Part with inline data
+            part = types.Part(
+                inline_data=blob
+            )
+            
+            # Try passing the Part to VideoGenerationReferenceImage
             reference = types.VideoGenerationReferenceImage(
-                image=image_dict,
+                image=part,
                 reference_type="asset"
             )
             
