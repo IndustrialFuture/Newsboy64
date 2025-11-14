@@ -268,22 +268,25 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
                 # Add reference image if needed
                 if use_image and image_uri:
                     # Get the file object from URI
-                    image_file = genai.get_file(name=image_uri.split('/')[-1])
+                    file_name = image_uri.split('/')[-1]
+                    image_file = genai.get_file(name=file_name)
                     content_parts.append(image_file)
                 
                 # Add prompt
                 content_parts.append(prompt_text)
                 
-                # Call Veo API
+                # Call Veo API - FIXED: Use correct API structure
+                log(f"[VEO] Submitting generation request for shot {shot_num}...")
+                
+                # For video generation, we need to use generate_content with specific model
                 model = genai.GenerativeModel(VEO_MODEL)
                 
-                log(f"[VEO] Submitting generation request for shot {shot_num}...")
                 response = model.generate_content(
-                    content_parts,
-                    generation_config=genai.GenerationConfig(
-                        response_modalities=["VIDEO"],
-                        temperature=0.7
-                    )
+                    contents=content_parts,
+                    generation_config={
+                        "temperature": 0.7,
+                        "candidate_count": 1
+                    }
                 )
                 
                 # FIXED: Wait for video generation (async operation)
@@ -296,7 +299,6 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
                 
                 while elapsed < max_wait_time:
                     # Check if operation is complete
-                    # Note: This polling mechanism may need adjustment based on actual API behavior
                     try:
                         if hasattr(response, '_result'):
                             if response._result.done():
@@ -340,7 +342,8 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
                     elif hasattr(video_part, 'file_data') and video_part.file_data:
                         file_uri = video_part.file_data.file_uri
                         log(f"[VEO] Downloading video from {file_uri}...")
-                        video_file = genai.get_file(name=file_uri.split('/')[-1])
+                        file_name = file_uri.split('/')[-1]
+                        video_file = genai.get_file(name=file_name)
                         
                         # Download file
                         import urllib.request
@@ -356,6 +359,8 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
                     return output_path
                 else:
                     log(f"[VEO] ⚠️ Shot {shot_num} - couldn't extract video from response")
+                    log(f"[VEO] DEBUG: Response type: {type(response)}")
+                    log(f"[VEO] DEBUG: Response dir: {dir(response)}")
                 
             except Exception as e:
                 log(f"[VEO] ⚠️ Shot {shot_num} attempt {attempt}/2 failed: {e}")
