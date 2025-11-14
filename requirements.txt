@@ -14,3 +14,4 @@ readability-lxml
 requests
 scipy
 trafilatura
+google-generativeai
