@@ -17,7 +17,8 @@ import time
 import subprocess
 from typing import Dict, List, Optional
 from pathlib import Path
-import google.generativeai as genai
+from google import genai  # ← CORRECT NEW LIBRARY
+from google.genai import types
 
 from utils import (
     log, log_progress, save_response, call_llm,
@@ -31,16 +32,16 @@ PROMPT_REPORTER1 = os.getenv("PROMPT_REPORTER1", "").strip()
 PROMPT_REPORTER2 = os.getenv("PROMPT_REPORTER2", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-# Veo model - hardcoded but easy to update
-# UPDATE THIS LINE if Google releases a newer version (e.g., veo-4.0)
-VEO_MODEL = "models/veo-3.1"
+# Veo model - CORRECT model name from docs
+VEO_MODEL = "veo-3.1-generate-preview"
 
 # Reference image path (in repo)
 REFERENCE_IMAGE_PATH = "Diane-Medium.png"
 
-# Configure Gemini
+# Initialize Gemini client
+client = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ========================================
 # STEP 1: GENERATE SCRIPT (REPORTER1)
@@ -207,13 +208,13 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 # STEP 3: UPLOAD REFERENCE IMAGE
 # ========================================
 
-def upload_reference_image() -> Optional[str]:
+def upload_reference_image() -> Optional[object]:
     """
     Upload reference image to Gemini File API.
-    Returns: file URI for use in generation requests
+    Returns: uploaded file object for use in generation requests
     """
-    if not GEMINI_API_KEY:
-        log("[VEO] ❌ GEMINI_API_KEY not set")
+    if not client:
+        log("[VEO] ❌ Gemini client not initialized")
         return None
     
     if not os.path.exists(REFERENCE_IMAGE_PATH):
@@ -222,18 +223,20 @@ def upload_reference_image() -> Optional[str]:
     
     try:
         log(f"[VEO] Uploading reference image: {REFERENCE_IMAGE_PATH}")
-        uploaded_file = genai.upload_file(path=REFERENCE_IMAGE_PATH)
-        log(f"[VEO] ✅ Uploaded: {uploaded_file.uri}")
-        return uploaded_file.uri
+        uploaded_file = client.files.upload(file=REFERENCE_IMAGE_PATH)
+        log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
+        return uploaded_file
     except Exception as e:
         log(f"[VEO] ❌ Failed to upload image: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ========================================
 # STEP 4: GENERATE SINGLE SHOT WITH RETRIES
 # ========================================
 
-def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: str) -> Optional[str]:
+def generate_shot_with_retries(shot_data: dict, reference_image: Optional[object], q_id: str) -> Optional[str]:
     """
     Generate a single shot with retry logic and alternate prompts.
     
@@ -245,6 +248,10 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
     
     if not visual_prompts:
         log(f"[VEO] ⚠️ Shot {shot_num} has no visual prompts - skipping")
+        return None
+    
+    if not client:
+        log(f"[VEO] ❌ Gemini client not initialized")
         return None
     
     log(f"[VEO] Generating shot {shot_num} for Q {q_id}")
@@ -262,105 +269,58 @@ def generate_shot_with_retries(shot_data: dict, image_uri: Optional[str], q_id: 
         # Try this version up to 2 times
         for attempt in range(1, 3):
             try:
-                # Build content parts
-                content_parts = []
-                
-                # Add reference image if needed
-                if use_image and image_uri:
-                    # Get the file object from URI
-                    file_name = image_uri.split('/')[-1]
-                    image_file = genai.get_file(name=file_name)
-                    content_parts.append(image_file)
-                
-                # Add prompt
-                content_parts.append(prompt_text)
-                
-                # Call Veo API - FIXED: Use correct API structure
                 log(f"[VEO] Submitting generation request for shot {shot_num}...")
                 
-                # For video generation, we need to use generate_content with specific model
-                model = genai.GenerativeModel(VEO_MODEL)
+                # Call Veo API - CORRECT METHOD from docs
+                if use_image and reference_image:
+                    # With reference image
+                    operation = client.models.generate_videos(
+                        model=VEO_MODEL,
+                        prompt=prompt_text,
+                        image=reference_image,
+                    )
+                else:
+                    # Text-to-video only
+                    operation = client.models.generate_videos(
+                        model=VEO_MODEL,
+                        prompt=prompt_text,
+                    )
                 
-                response = model.generate_content(
-                    contents=content_parts,
-                    generation_config={
-                        "temperature": 0.7,
-                        "candidate_count": 1
-                    }
-                )
+                # Poll for completion (from docs)
+                log(f"[VEO] ⏳ Waiting for shot {shot_num} to generate (2-5 minutes)...")
                 
-                # FIXED: Wait for video generation (async operation)
-                log(f"[VEO] ⏳ Waiting for shot {shot_num} to generate (this takes 2-5 minutes)...")
-                
-                # Poll for completion (check every 30 seconds)
                 max_wait_time = 600  # 10 minutes max
                 elapsed = 0
-                poll_interval = 30
+                poll_interval = 10  # Check every 10 seconds
                 
-                while elapsed < max_wait_time:
-                    # Check if operation is complete
-                    try:
-                        if hasattr(response, '_result'):
-                            if response._result.done():
-                                log(f"[VEO] ✅ Shot {shot_num} generation complete!")
-                                break
-                        elif hasattr(response, 'parts') and len(response.parts) > 0:
-                            # If we have parts, generation is complete
-                            log(f"[VEO] ✅ Shot {shot_num} generation complete!")
-                            break
-                    except:
-                        pass
+                while not operation.done:
+                    if elapsed >= max_wait_time:
+                        log(f"[VEO] ⏱️ Shot {shot_num} timed out after {max_wait_time}s")
+                        break
                     
                     time.sleep(poll_interval)
                     elapsed += poll_interval
                     log(f"[VEO] ⏳ Still waiting... ({elapsed}s elapsed)")
+                    
+                    # Refresh operation status
+                    operation = client.operations.get(operation)
                 
-                if elapsed >= max_wait_time:
-                    log(f"[VEO] ⏱️ Shot {shot_num} timed out after {max_wait_time}s")
+                if not operation.done:
+                    log(f"[VEO] ⏱️ Shot {shot_num} timed out")
                     continue
                 
-                # Save video
+                # Download the generated video
+                generated_video = operation.response.generated_videos[0]
+                
                 output_filename = f"shot_{shot_num}_q{q_id}.mp4"
                 output_path = os.path.join("out", output_filename)
                 
-                # Extract video data from response
-                # Try multiple methods as API behavior may vary
-                video_saved = False
+                # Download and save
+                client.files.download(file=generated_video.video)
+                generated_video.video.save(output_path)
                 
-                # Method 1: Inline data
-                if hasattr(response, 'parts') and len(response.parts) > 0:
-                    video_part = response.parts[0]
-                    
-                    if hasattr(video_part, 'inline_data') and video_part.inline_data:
-                        video_data = video_part.inline_data.data
-                        with open(output_path, 'wb') as f:
-                            f.write(video_data)
-                        log(f"[VEO] ✅ Shot {shot_num} saved to {output_path} (inline)")
-                        video_saved = True
-                    
-                    # Method 2: File reference
-                    elif hasattr(video_part, 'file_data') and video_part.file_data:
-                        file_uri = video_part.file_data.file_uri
-                        log(f"[VEO] Downloading video from {file_uri}...")
-                        file_name = file_uri.split('/')[-1]
-                        video_file = genai.get_file(name=file_name)
-                        
-                        # Download file
-                        import urllib.request
-                        urllib.request.urlretrieve(video_file.uri, output_path)
-                        log(f"[VEO] ✅ Shot {shot_num} saved to {output_path} (download)")
-                        video_saved = True
-                
-                # Method 3: Direct text content (shouldn't happen for video, but handle it)
-                if not video_saved and hasattr(response, 'text'):
-                    log(f"[VEO] ⚠️ Got text response instead of video: {response.text[:200]}")
-                
-                if video_saved:
-                    return output_path
-                else:
-                    log(f"[VEO] ⚠️ Shot {shot_num} - couldn't extract video from response")
-                    log(f"[VEO] DEBUG: Response type: {type(response)}")
-                    log(f"[VEO] DEBUG: Response dir: {dir(response)}")
+                log(f"[VEO] ✅ Shot {shot_num} saved to {output_path}")
+                return output_path
                 
             except Exception as e:
                 log(f"[VEO] ⚠️ Shot {shot_num} attempt {attempt}/2 failed: {e}")
@@ -452,8 +412,8 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
         return None
     
     # Step 3: Upload reference image (once per question)
-    image_uri = upload_reference_image()
-    if not image_uri:
+    reference_image = upload_reference_image()
+    if not reference_image:
         log("[VEO] ⚠️ Proceeding without reference image")
     
     # Step 4: Generate each shot
@@ -461,7 +421,7 @@ def run_stage4_for_question(forecast: dict) -> Optional[str]:
     generated_shots = []
     
     for shot_data in shots:
-        shot_file = generate_shot_with_retries(shot_data, image_uri, q_id)
+        shot_file = generate_shot_with_retries(shot_data, reference_image, q_id)
         if shot_file:
             generated_shots.append(shot_file)
         else:
@@ -525,3 +485,5 @@ def run_stage4(forecasts: List[dict]) -> Optional[Dict[str, str]]:
 # ========================================
 # END OF STAGE4_VEO
 # ========================================
+
+google-genai
