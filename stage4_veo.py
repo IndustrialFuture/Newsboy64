@@ -207,12 +207,15 @@ def generate_veo_prompts(script: dict) -> Optional[dict]:
 
 def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
     """
-    Load all reference images.
+    Load all reference images via File API upload.
     Returns: List of VideoGenerationReferenceImage objects
     """
     references = []
     
-    # List of images to load
+    if not client:
+        log("[VEO] ❌ Gemini client not initialized")
+        return references
+    
     image_paths = [
         ("Diane-Medium.png", "anchor"),
         # ("capitol-exterior.png", "capitol"),  # Uncomment when you add this
@@ -225,31 +228,24 @@ def load_reference_images() -> List[types.VideoGenerationReferenceImage]:
             continue
         
         try:
-            log(f"[VEO] Loading reference image: {image_path}")
+            log(f"[VEO] Uploading reference image via File API: {image_path}")
             
-            # Read raw bytes
-            with open(image_path, 'rb') as f:
-                image_bytes = f.read()
+            # Upload to File API (like video upload example in docs)
+            uploaded_file = client.files.upload(file=image_path)
+            log(f"[VEO] ✅ Uploaded: {uploaded_file.name}")
             
-            # Determine mime type
-            if image_path.lower().endswith('.png'):
-                mime_type = 'image/png'
-            elif image_path.lower().endswith(('.jpg', '.jpeg')):
-                mime_type = 'image/jpeg'
-            else:
-                mime_type = 'image/png'
+            # Wait for processing
+            while uploaded_file.state.name == "PROCESSING":
+                time.sleep(1)
+                uploaded_file = client.files.get(name=uploaded_file.name)
             
-            # Create Part with inline_data
-            image_part = types.Part(
-                inline_data=types.Blob(
-                    mime_type=mime_type,
-                    data=image_bytes
-                )
-            )
+            if uploaded_file.state.name == "FAILED":
+                log(f"[VEO] ❌ File processing failed: {image_path}")
+                continue
             
-            # Create reference - using the Part's image data
+            # Create reference using the uploaded file
             reference = types.VideoGenerationReferenceImage(
-                image=image_part.inline_data,
+                image=uploaded_file,  # Use the uploaded file object directly
                 reference_type="asset"
             )
             
