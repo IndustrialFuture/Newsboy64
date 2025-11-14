@@ -14,4 +14,4 @@ readability-lxml
 requests
 scipy
 trafilatura
-google.genai
+google-genai
