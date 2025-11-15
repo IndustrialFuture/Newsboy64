@@ -8,7 +8,7 @@ Searches Polymarket for relevant prediction markets and scores them using Tversk
 import os
 import json
 import requests
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
 
 # Import from your existing utils
@@ -32,7 +32,7 @@ POLYMARKET_TAGS = [
 ]
 
 # Model for LLM calls (Claude 3.5 Sonnet via OpenRouter)
-QUERY_GEN_MODEL = "anthropic/claude-3.5-sonnet"  # Adjust if your OpenRouter uses different path
+QUERY_GEN_MODEL = "anthropic/claude-3.5-sonnet"
 SCORER_MODEL = "anthropic/claude-3.5-sonnet"
 
 # Load prompts from files
@@ -307,7 +307,7 @@ def filter_markets_by_keywords(markets: List[dict], queries: List[str]) -> List[
 
 def score_markets_with_llm(markets: List[dict], question_obj: dict) -> Optional[dict]:
     """
-    Use LLM to score markets using T. similarity.
+    Use LLM to score markets using Tversky similarity.
     
     Returns MK_FINDINGS structure or None if failed.
     """
@@ -315,7 +315,7 @@ def score_markets_with_llm(markets: List[dict], question_obj: dict) -> Optional[
         log("[POLYMARKET] ℹ️ No markets to score")
         return create_empty_mk_findings(question_obj)
     
-    log(f"[POLYMARKET] 🧮 Scoring {len(markets)} markets with T. similarity (α=0.7, β=0.3)...")
+    log(f"[POLYMARKET] 🧮 Scoring {len(markets)} markets with Tversky similarity (α=0.7, β=0.3)...")
     
     if not PROMPT_SCORER:
         log("[POLYMARKET] ❌ Scorer prompt not loaded")
