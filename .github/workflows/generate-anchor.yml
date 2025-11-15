@@ -24,17 +24,23 @@ jobs:
         run: |
           python - <<EOF
           from google import genai
+          from google.genai import types
           import os
           import pickle
           
           client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
           
-          anchor_prompt = """16:9 widescreen professional blonde female news anchor at broadcast desk. Medium close-up shot with anchor positioned on left third of frame, leaving empty space over right shoulder for graphics. Direct eye contact with camera, serious authoritative expression. Business professional attire. Modern news studio with soft lighting, blue and neutral tones in background. Static composition, no camera movement. No text overlays, no chyrons, no graphics, clean frame. High quality broadcast photography, photorealistic."""
+          anchor_prompt = """A professional blonde female news anchor at a broadcast desk. Medium close-up shot with anchor positioned on left third of frame, leaving empty space over right shoulder for graphics. Direct eye contact with camera, serious authoritative expression. Business professional attire. Modern news studio with soft lighting, blue and neutral tones in background. Static composition, no camera movement. No text overlays, no chyrons, no graphics, clean frame. High quality broadcast photography, photorealistic."""
           
           image_response = client.models.generate_content(
               model="gemini-2.5-flash-image",
               contents=anchor_prompt,
-              config={"response_modalities":['IMAGE']}
+              config=types.GenerateContentConfig(
+                  response_modalities=['IMAGE'],
+                  image_config=types.ImageConfig(
+                      aspect_ratio="16:9"
+                  )
+              )
           )
           
           # Save the entire Part object with pickle
@@ -45,7 +51,7 @@ jobs:
           anchor_image = image_response.parts[0].as_image()
           anchor_image.save("Diane-Nano.png")
           
-          print("✅ Saved anchor Part object and PNG")
+          print("✅ Saved 16:9 anchor Part object and PNG")
           EOF
       
       - name: Upload anchor files
