@@ -4,6 +4,7 @@
 Forecast Pipeline - Method Runner
 Runs KM/BD/EX legs using 2-phase PT1→PT2 pattern.
 Handles EX leg's special dual-output (MK_RESULTS + PL_RESULTS).
+NOW WITH POLYMARKET API INTEGRATION!
 """
 
 import os
@@ -18,6 +19,15 @@ from utils import (
     MAX_RETRIES, RETRY_DELAYS, TIMEOUT_PT1_RESEARCH, TIMEOUT_PT2_FORECAST,
     MAX_TOTAL_TIME_PT1, MAX_TOTAL_TIME_PT2
 )
+
+# Import Polymarket search module
+try:
+    from polymarket_search import get_polymarket_findings
+    POLYMARKET_AVAILABLE = True
+    log("[INIT] ✅ Polymarket search module loaded")
+except ImportError as e:
+    POLYMARKET_AVAILABLE = False
+    log(f"[INIT] ⚠️ Polymarket search module not available: {e}")
 
 # Get models from environment (NO HARDCODED FALLBACKS)
 MODEL_RESEARCH = os.getenv("MODEL_RS", "").strip()
@@ -237,7 +247,7 @@ def run_leg(
     return normalized
 
 # ========================================
-# EX LEG RUNNER (SPECIAL CASE)
+# EX LEG RUNNER (SPECIAL CASE WITH POLYMARKET)
 # ========================================
 
 def run_ex_leg(
@@ -246,11 +256,12 @@ def run_ex_leg(
     model_forecast: str
 ) -> Optional[dict]:
     """
-    Run EX leg with special handling for dual output (MK_RESULTS + PL_RESULTS).
+    Run EX leg with Polymarket API integration and special dual output handling.
     
-    The EX leg is unique:
-    - PT1 outputs findings (like other legs)
-    - PT2 outputs BOTH MK_RESULTS and PL_RESULTS in a single response
+    NEW FLOW:
+    1. Get MK_FINDINGS from Polymarket API (replaces web search for markets)
+    2. Run PT1 for POLLS ONLY → PL_FINDINGS
+    3. Run PT2 with both MK_FINDINGS + PL_FINDINGS → MK_RESULTS + PL_RESULTS
     
     Returns: {
         "EX_RESULTS": {...},  # Main results envelope
@@ -268,9 +279,35 @@ def run_ex_leg(
         log(f"[{leg_name}] ⏭️ SKIPPED (prompts not configured)")
         return None
     
-    log_progress(f"🔬 STARTING {leg_name} LEG (DUAL OUTPUT)")
+    log_progress(f"🔬 STARTING {leg_name} LEG (DUAL OUTPUT WITH POLYMARKET)")
     
-    # PT1: Research
+    # ===== NEW: GET MK_FINDINGS FROM POLYMARKET API =====
+    mk_findings = None
+    
+    if POLYMARKET_AVAILABLE:
+        try:
+            log("[POLYMARKET] 🚀 Starting Polymarket API search...")
+            mk_findings = get_polymarket_findings(qobj)
+            
+            if mk_findings and mk_findings.get("items"):
+                num_markets = len(mk_findings.get("items", []))
+                log(f"[POLYMARKET] ✅ Successfully retrieved {num_markets} markets")
+            else:
+                log("[POLYMARKET] ℹ️ No markets found - continuing with empty MK_FINDINGS")
+                if not mk_findings:
+                    mk_findings = create_empty_mk_findings(qobj)
+        
+        except Exception as e:
+            log(f"[POLYMARKET] ❌ Exception during API search: {e}")
+            log("[POLYMARKET] ℹ️ Continuing gracefully with empty MK_FINDINGS")
+            mk_findings = create_empty_mk_findings(qobj)
+    else:
+        log("[POLYMARKET] ⚠️ Polymarket module not available - using empty MK_FINDINGS")
+        mk_findings = create_empty_mk_findings(qobj)
+    
+    # ===== EXISTING: PT1 FOR POLLS ONLY =====
+    log(f"[{leg_name} PT.1] Starting research on POLLS (markets handled by Polymarket API)")
+    
     pt1_response, pt1_output = run_pt1(leg_name, prompt_pt1, qobj, model_research)
     
     if pt1_output is None:
@@ -282,16 +319,25 @@ def run_ex_leg(
         log(f"[{leg_name}] ℹ️ PT.1 returned NOT_APPLICABLE - skipping PT.2")
         return None
     
-    # PT2: Forecast (expecting dual output)
-    log(f"[{leg_name}] PT.2 will output BOTH MK_RESULTS and PL_RESULTS")
+    # PT1 output should be PL_FINDINGS only (polls)
+    pl_findings = pt1_output
     
+    # ===== PT2: FORECAST WITH BOTH MK_FINDINGS + PL_FINDINGS =====
+    log(f"[{leg_name} PT.2] Starting forecast with MK_FINDINGS (Polymarket) + PL_FINDINGS (PT1)")
+    
+    # Build combined findings for PT2
     q_for_leg = augment_question_object(qobj)
+    
+    # PT2 expects both MK_FINDINGS and PL_FINDINGS
     user_lines = [
         "QUESTION_OBJECT:",
         json.dumps(q_for_leg, ensure_ascii=False, indent=2),
         "",
-        f"{leg_name}_FINDINGS:",
-        json.dumps(pt1_output, ensure_ascii=False, indent=2)
+        "MK_FINDINGS:",
+        json.dumps(mk_findings, ensure_ascii=False, indent=2),
+        "",
+        "PL_FINDINGS:",
+        json.dumps(pl_findings, ensure_ascii=False, indent=2)
     ]
     user_payload = "\n".join(user_lines)
     
@@ -373,8 +419,29 @@ def run_ex_leg(
         "PL_RESULTS": pl_normalized.get("PL_RESULTS", {})
     }
     
-    log(f"[{leg_name}] ✅ LEG COMPLETE (dual output)")
+    log(f"[{leg_name}] ✅ LEG COMPLETE (dual output with Polymarket integration)")
     return final_results
+
+def create_empty_mk_findings(qobj: dict) -> dict:
+    """Create empty MK_FINDINGS structure when Polymarket search fails"""
+    return {
+        "question_type": qobj.get("question_type", "binary"),
+        "locked_mc": False,
+        "horizon_utc": qobj.get("horizon_utc"),
+        "options_canonical": qobj.get("mc_options") or qobj.get("options"),
+        "items": [],
+        "prisma": {
+            "identified": 0,
+            "screened": 0,
+            "included": 0,
+            "excluded": 0,
+            "top_exclusion_reasons": ["Polymarket search not available or failed"]
+        },
+        "search_log": {
+            "queries": [],
+            "venues": ["Polymarket"]
+        }
+    }
 
 # ========================================
 # RUN ALL METHODS FOR A QUESTION
@@ -415,7 +482,7 @@ def run_all_methods(qobj: dict) -> Dict[str, dict]:
     if bd_result:
         results["BD"] = bd_result
     
-    # Run EX leg (special case)
+    # Run EX leg (special case with Polymarket)
     ex_result = run_ex_leg(qobj, MODEL_RESEARCH, MODEL_FORECAST)
     if ex_result:
         results["EX"] = ex_result
