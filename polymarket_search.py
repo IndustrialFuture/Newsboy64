@@ -499,4 +499,74 @@ def create_empty_mk_findings(question_obj: dict) -> dict:
 
 # ========================================
 # MAIN ENTRY POINT
-# ================================
+# ========================================
+
+def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optional[dict]:
+    """
+    Main entry point: Get MK_FINDINGS from Polymarket API.
+    
+    This function orchestrates the entire workflow:
+    1. Generate search queries (LLM)
+    2. Search Polymarket API (Python)
+    3. Score markets (LLM)
+    
+    Returns MK_FINDINGS dict or None if completely failed.
+    Falls back to empty MK_FINDINGS on partial failure.
+    """
+    log("[POLYMARKET] 🚀 Starting Polymarket API search...")
+    
+    # Step 1: Generate queries
+    query_result = None
+    for attempt in range(1, max_retries + 1):
+        query_result = generate_search_queries(question_obj)
+        if query_result:
+            break
+        if attempt < max_retries:
+            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries} for query generation...")
+    
+    if not query_result:
+        log("[POLYMARKET] ❌ Failed to generate queries after retries")
+        return create_empty_mk_findings(question_obj)
+    
+    tags = query_result.get("tags", [])
+    queries = query_result.get("queries", [])
+    
+    if not tags:
+        tags = ["politics"]  # Default fallback
+        log("[POLYMARKET] ⚠️ No tags generated, using default: ['politics']")
+    
+    if not queries:
+        log("[POLYMARKET] ❌ No queries generated")
+        return create_empty_mk_findings(question_obj)
+    
+    # Step 2: Search API
+    try:
+        markets = search_polymarket_api(tags, queries, max_markets=400)
+    except Exception as e:
+        log(f"[POLYMARKET] ❌ API search failed: {e}")
+        return create_empty_mk_findings(question_obj)
+    
+    if not markets:
+        log("[POLYMARKET] ℹ️ No markets found matching queries")
+        empty = create_empty_mk_findings(question_obj)
+        empty["search_log"]["queries"] = queries
+        return empty
+    
+    # Step 3: Score markets
+    mk_findings = None
+    for attempt in range(1, max_retries + 1):
+        mk_findings = score_markets_with_llm(markets, question_obj)
+        if mk_findings:
+            break
+        if attempt < max_retries:
+            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries} for market scoring...")
+    
+    if not mk_findings:
+        log("[POLYMARKET] ❌ Failed to score markets after retries")
+        return create_empty_mk_findings(question_obj)
+    
+    return mk_findings
+
+# ========================================
+# END OF POLYMARKET_SEARCH MODULE
+# ========================================
