@@ -196,10 +196,10 @@ def search_polymarket_api(tags: List[str], queries: List[str], max_markets: int 
     Args:
         tags: List of category tags to search (e.g., ["politics", "economics"])
         queries: List of keyword queries to filter results
-        max_markets: Maximum markets to fetch per tag
+        max_markets: Maximum markets to fetch per tag (scans all, filters to top 25)
     
     Returns:
-        List of unique market dicts
+        List of unique market dicts (top 25 most relevant)
     """
     log("[POLYMARKET] 🌐 Searching Polymarket API...")
     
@@ -222,19 +222,20 @@ def search_polymarket_api(tags: List[str], queries: List[str], max_markets: int 
         
         log(f"[POLYMARKET] 📊 Retrieved {len(markets)} markets from '{tag}'")
         
-        # Filter by keywords
-        filtered = filter_markets_by_keywords(markets, queries)
-        log(f"[POLYMARKET] 🔍 After keyword filtering: {len(filtered)} markets")
-        
-        # Deduplicate
-        for market in filtered:
+        # Deduplicate first (before filtering)
+        for market in markets:
             market_id = market.get("condition_id") or market.get("id")
             if market_id and market_id not in seen_ids:
                 all_markets.append(market)
                 seen_ids.add(market_id)
     
-    log(f"[POLYMARKET] ✅ Total unique markets found: {len(all_markets)}")
-    return all_markets
+    log(f"[POLYMARKET] 📚 Total unique markets scanned: {len(all_markets)}")
+    
+    # Filter and rank by keyword relevance
+    filtered = filter_markets_by_keywords(all_markets, queries, max_results=25)
+    log(f"[POLYMARKET] ✅ Filtered to top {len(filtered)} most relevant markets")
+    
+    return filtered
 
 def get_tag_ids() -> Dict[str, str]:
     """
@@ -267,7 +268,7 @@ def get_tag_ids() -> Dict[str, str]:
         return {}
 
 def fetch_markets_by_tag(tag_id: str, max_markets: int = 400) -> List[dict]:
-    """Fetch markets filtered by tag"""
+    """Fetch markets filtered by tag - SCANS ALL PAGES"""
     markets = []
     
     for offset in range(0, max_markets, 100):
@@ -304,7 +305,7 @@ def fetch_markets_by_tag(tag_id: str, max_markets: int = 400) -> List[dict]:
     return markets
 
 def fetch_markets_untagged(queries: List[str], max_markets: int = 400) -> List[dict]:
-    """Fetch markets without tag filter (fallback)"""
+    """Fetch markets without tag filter (fallback) - SCANS ALL PAGES"""
     markets = []
     
     for offset in range(0, max_markets, 100):
@@ -338,15 +339,15 @@ def fetch_markets_untagged(queries: List[str], max_markets: int = 400) -> List[d
     
     return markets
 
-def filter_markets_by_keywords(markets: List[dict], queries: List[str]) -> List[dict]:
+def filter_markets_by_keywords(markets: List[dict], queries: List[str], max_results: int = 25) -> List[dict]:
     """
-    Filter markets by keyword matching with improved word-level matching.
-    Now matches individual words, not just full substrings.
+    Filter markets by keyword matching with scoring and ranking.
+    
+    Scans ALL markets, scores by relevance, returns top N.
+    Markets with more matching query words rank higher.
     """
     if not queries:
-        return markets
-    
-    filtered = []
+        return markets[:max_results]  # Just take first N if no queries
     
     # Break queries into individual words
     query_words = set()
@@ -354,7 +355,10 @@ def filter_markets_by_keywords(markets: List[dict], queries: List[str]) -> List[
         words = query.lower().split()
         query_words.update(words)
     
-    log(f"[POLYMARKET] 🔍 Matching words: {sorted(query_words)[:10]}...")
+    log(f"[POLYMARKET] 🔍 Scanning {len(markets)} markets for words: {sorted(query_words)[:10]}...")
+    
+    # Score each market by number of matching words
+    scored_markets = []
     
     for market in markets:
         question = market.get("question", "").lower()
@@ -363,8 +367,23 @@ def filter_markets_by_keywords(markets: List[dict], queries: List[str]) -> List[
         # Check if any query word appears in question words
         matches = query_words & question_words
         if matches:
-            filtered.append(market)
-            log(f"[POLYMARKET] ✓ Match: '{market.get('question', '')[:60]}...' (words: {matches})")
+            # Score by number of matches (more matches = higher priority)
+            score = len(matches)
+            scored_markets.append((score, market, matches))
+    
+    # Sort by score (descending) - best matches first
+    scored_markets.sort(key=lambda x: x[0], reverse=True)
+    
+    # Log summary
+    log(f"[POLYMARKET] 📊 Found {len(scored_markets)} matching markets (keeping top {max_results})")
+    
+    # Log top matches
+    for i, (score, market, matches) in enumerate(scored_markets[:max_results], 1):
+        question = market.get('question', '')[:60]
+        log(f"[POLYMARKET] #{i} (score={score}): '{question}...' | words: {matches}")
+    
+    # Return only the markets (not scores), limited to max_results
+    filtered = [market for score, market, matches in scored_markets[:max_results]]
     
     return filtered
 
@@ -507,8 +526,9 @@ def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optiona
     
     This function orchestrates the entire workflow:
     1. Generate search queries (LLM)
-    2. Search Polymarket API (Python)
-    3. Score markets (LLM)
+    2. Search Polymarket API (Python) - scans ALL markets
+    3. Filter to top 25 most relevant (Python)
+    4. Score markets with Tversky (LLM)
     
     Returns MK_FINDINGS dict or None if completely failed.
     Falls back to empty MK_FINDINGS on partial failure.
@@ -539,7 +559,7 @@ def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optiona
         log("[POLYMARKET] ❌ No queries generated")
         return create_empty_mk_findings(question_obj)
     
-    # Step 2: Search API
+    # Step 2: Search API (scans all, filters to top 25)
     try:
         markets = search_polymarket_api(tags, queries, max_markets=400)
     except Exception as e:
@@ -552,7 +572,7 @@ def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optiona
         empty["search_log"]["queries"] = queries
         return empty
     
-    # Step 3: Score markets
+    # Step 3: Score markets (only top 25)
     mk_findings = None
     for attempt in range(1, max_retries + 1):
         mk_findings = score_markets_with_llm(markets, question_obj)
