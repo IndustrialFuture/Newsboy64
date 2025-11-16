@@ -50,7 +50,7 @@ PROMPT_QUERY_GEN = load_prompt("polymarket_query_gen.txt")
 PROMPT_SCORER = load_prompt("polymarket_scorer.txt")
 
 # ========================================
-# STEP 1: GENERATE SEARCH QUERIES
+# STEP 1: GENERATE SEARCH QUERIES (WITH DEBUG LOGGING)
 # ========================================
 
 def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
@@ -86,32 +86,75 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
         log("[POLYMARKET] ❌ Empty or invalid response from query generator")
         return None
     
+    # DEBUG: Show what we got
+    log(f"[POLYMARKET] 📝 Raw response ({len(response)} chars):")
+    log(f"[POLYMARKET] First 500 chars: {response[:500]}")
+    
     # Parse JSON response
     try:
         # Try to extract JSON from response
         response_clean = response.strip()
         
         # Remove markdown code blocks if present
-        if response_clean.startswith("```"):
+        if "```json" in response_clean:
+            # Extract content between ```json and ```
+            start = response_clean.find("```json") + 7
+            end = response_clean.find("```", start)
+            if end > start:
+                response_clean = response_clean[start:end].strip()
+                log("[POLYMARKET] 🔧 Extracted from ```json code block")
+        elif response_clean.startswith("```"):
+            # Generic code block
             lines = response_clean.split("\n")
             response_clean = "\n".join(lines[1:-1]) if len(lines) > 2 else response_clean
+            log("[POLYMARKET] 🔧 Extracted from ``` code block")
+        
+        # Try to find JSON object if there's extra text
+        if not response_clean.startswith("{"):
+            # Look for first {
+            start_idx = response_clean.find("{")
+            if start_idx >= 0:
+                response_clean = response_clean[start_idx:]
+                log(f"[POLYMARKET] 🔧 Found JSON starting at position {start_idx}")
+        
+        # Try to find end of JSON object if there's trailing text
+        if response_clean.count("{") > 0:
+            depth = 0
+            end_idx = -1
+            for i, char in enumerate(response_clean):
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i + 1
+                        break
+            if end_idx > 0:
+                response_clean = response_clean[:end_idx]
+                log(f"[POLYMARKET] 🔧 Trimmed to valid JSON ({end_idx} chars)")
+        
+        log(f"[POLYMARKET] 🔍 Attempting to parse: {response_clean[:200]}...")
         
         result = json.loads(response_clean)
         
         # Validate structure
         if not isinstance(result, dict):
-            log("[POLYMARKET] ❌ Response is not a dict")
+            log(f"[POLYMARKET] ❌ Response is not a dict, got {type(result)}")
             return None
         
+        log(f"[POLYMARKET] 📋 Parsed JSON keys: {list(result.keys())}")
+        
         if "tags" not in result or "queries" not in result:
-            log("[POLYMARKET] ❌ Missing 'tags' or 'queries' in response")
+            log(f"[POLYMARKET] ❌ Missing 'tags' or 'queries' in response")
+            log(f"[POLYMARKET] Got keys: {list(result.keys())}")
+            log(f"[POLYMARKET] Full result: {json.dumps(result, indent=2)[:500]}")
             return None
         
         tags = result["tags"]
         queries = result["queries"]
         
         if not isinstance(tags, list) or not isinstance(queries, list):
-            log("[POLYMARKET] ❌ Invalid types for tags/queries")
+            log(f"[POLYMARKET] ❌ Invalid types - tags: {type(tags)}, queries: {type(queries)}")
             return None
         
         if not queries:
@@ -125,7 +168,7 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
     
     except json.JSONDecodeError as e:
         log(f"[POLYMARKET] ❌ JSON parse error: {e}")
-        log(f"[POLYMARKET] Response was: {response[:200]}...")
+        log(f"[POLYMARKET] Attempted to parse: {response_clean[:500]}...")
         return None
     except Exception as e:
         log(f"[POLYMARKET] ❌ Error parsing query response: {e}")
