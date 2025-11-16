@@ -8,6 +8,7 @@ Searches Polymarket for relevant prediction markets and scores them using Tversk
 import os
 import json
 import requests
+import time
 from typing import List, Dict, Optional
 from datetime import datetime, timezone
 
@@ -50,7 +51,7 @@ PROMPT_QUERY_GEN = load_prompt("polymarket_query_gen.txt")
 PROMPT_SCORER = load_prompt("polymarket_scorer.txt")
 
 # ========================================
-# STEP 1: GENERATE SEARCH QUERIES (WITH DEBUG LOGGING)
+# STEP 1: GENERATE SEARCH QUERIES
 # ========================================
 
 def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
@@ -72,7 +73,7 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
     # Build user message
     user_message = "QUESTION_OBJECT:\n" + json.dumps(question_obj, indent=2, ensure_ascii=False)
     
-    # Call LLM (using your existing call_llm from utils.py)
+    # Call LLM
     response = call_llm(
         model=QUERY_GEN_MODEL,
         system_prompt=PROMPT_QUERY_GEN,
@@ -86,90 +87,61 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
         log("[POLYMARKET] ❌ Empty or invalid response from query generator")
         return None
     
-    # DEBUG: Show what we got
-    log(f"[POLYMARKET] 📝 Raw response ({len(response)} chars):")
-    log(f"[POLYMARKET] First 500 chars: {response[:500]}")
-    
     # Parse JSON response
     try:
-        # Try to extract JSON from response
         response_clean = response.strip()
         
-        # Remove markdown code blocks if present
+        # Remove markdown code blocks
         if "```json" in response_clean:
-            # Extract content between ```json and ```
             start = response_clean.find("```json") + 7
             end = response_clean.find("```", start)
             if end > start:
                 response_clean = response_clean[start:end].strip()
-                log("[POLYMARKET] 🔧 Extracted from ```json code block")
         elif response_clean.startswith("```"):
-            # Generic code block
             lines = response_clean.split("\n")
             response_clean = "\n".join(lines[1:-1]) if len(lines) > 2 else response_clean
-            log("[POLYMARKET] 🔧 Extracted from ``` code block")
         
-        # Try to find JSON object if there's extra text
+        # Find JSON object
         if not response_clean.startswith("{"):
-            # Look for first {
             start_idx = response_clean.find("{")
             if start_idx >= 0:
                 response_clean = response_clean[start_idx:]
-                log(f"[POLYMARKET] 🔧 Found JSON starting at position {start_idx}")
         
-        # Try to find end of JSON object if there's trailing text
-        if response_clean.count("{") > 0:
-            depth = 0
-            end_idx = -1
-            for i, char in enumerate(response_clean):
-                if char == "{":
-                    depth += 1
-                elif char == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end_idx = i + 1
-                        break
-            if end_idx > 0:
-                response_clean = response_clean[:end_idx]
-                log(f"[POLYMARKET] 🔧 Trimmed to valid JSON ({end_idx} chars)")
-        
-        log(f"[POLYMARKET] 🔍 Attempting to parse: {response_clean[:200]}...")
+        # Find end of JSON
+        depth = 0
+        for i, char in enumerate(response_clean):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    response_clean = response_clean[:i+1]
+                    break
         
         result = json.loads(response_clean)
         
-        # Validate structure
         if not isinstance(result, dict):
-            log(f"[POLYMARKET] ❌ Response is not a dict, got {type(result)}")
+            log(f"[POLYMARKET] ❌ Response is not a dict")
             return None
         
-        log(f"[POLYMARKET] 📋 Parsed JSON keys: {list(result.keys())}")
-        
         if "tags" not in result or "queries" not in result:
-            log(f"[POLYMARKET] ❌ Missing 'tags' or 'queries' in response")
-            log(f"[POLYMARKET] Got keys: {list(result.keys())}")
-            log(f"[POLYMARKET] Full result: {json.dumps(result, indent=2)[:500]}")
+            log(f"[POLYMARKET] ❌ Missing 'tags' or 'queries'")
             return None
         
         tags = result["tags"]
         queries = result["queries"]
         
-        # FIX: Convert strings to lists if needed
+        # Convert strings to lists if needed
         if isinstance(tags, str):
-            log("[POLYMARKET] 🔧 Converting tags string to list")
             tags = [tags]
             result["tags"] = tags
         
         if isinstance(queries, str):
-            log("[POLYMARKET] 🔧 Converting queries string to list")
             queries = [q.strip() for q in queries.split(",")]
             result["queries"] = queries
         
         if not isinstance(tags, list) or not isinstance(queries, list):
-            log(f"[POLYMARKET] ❌ Invalid types - tags: {type(tags)}, queries: {type(queries)}")
-            return None
-        
-        if not queries:
-            log("[POLYMARKET] ⚠️ No queries generated")
+            log(f"[POLYMARKET] ❌ Invalid types")
             return None
         
         log(f"[POLYMARKET] ✅ Generated {len(queries)} queries: {queries[:3]}...")
@@ -177,12 +149,8 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
         
         return result
     
-    except json.JSONDecodeError as e:
-        log(f"[POLYMARKET] ❌ JSON parse error: {e}")
-        log(f"[POLYMARKET] Attempted to parse: {response_clean[:500]}...")
-        return None
     except Exception as e:
-        log(f"[POLYMARKET] ❌ Error parsing query response: {e}")
+        log(f"[POLYMARKET] ❌ Error: {e}")
         return None
 
 # ========================================
@@ -190,77 +158,58 @@ def generate_search_queries(question_obj: dict) -> Optional[Dict[str, any]]:
 # ========================================
 
 def search_polymarket_api(tags: List[str], queries: List[str], max_markets: int = 400) -> List[dict]:
-    """
-    Search Polymarket API using tags and filter by keyword queries.
-    
-    Args:
-        tags: List of category tags to search (e.g., ["politics", "economics"])
-        queries: List of keyword queries to filter results
-        max_markets: Maximum markets to fetch per tag (scans all, filters to top 25)
-    
-    Returns:
-        List of unique market dicts (top 25 most relevant)
-    """
+    """Search Polymarket API and filter by keywords"""
     log("[POLYMARKET] 🌐 Searching Polymarket API...")
     
     all_markets = []
     seen_ids = set()
     
-    # First, get tag IDs from Polymarket
     tag_id_map = get_tag_ids()
     
     for tag in tags:
         tag_id = tag_id_map.get(tag.lower())
         
         if not tag_id:
-            log(f"[POLYMARKET] ⚠️ Unknown tag '{tag}', searching without tag filter")
-            # Fall back to untagged search
+            log(f"[POLYMARKET] ⚠️ Unknown tag '{tag}'")
             markets = fetch_markets_untagged(queries, max_markets)
         else:
-            log(f"[POLYMARKET] 🔍 Searching tag '{tag}' (ID: {tag_id})...")
+            log(f"[POLYMARKET] 🔍 Searching tag '{tag}'...")
             markets = fetch_markets_by_tag(tag_id, max_markets)
         
-        log(f"[POLYMARKET] 📊 Retrieved {len(markets)} markets from '{tag}'")
+        log(f"[POLYMARKET] 📊 Retrieved {len(markets)} markets")
         
-        # Deduplicate first (before filtering)
         for market in markets:
             market_id = market.get("condition_id") or market.get("id")
             if market_id and market_id not in seen_ids:
                 all_markets.append(market)
                 seen_ids.add(market_id)
     
-    log(f"[POLYMARKET] 📚 Total unique markets scanned: {len(all_markets)}")
+    log(f"[POLYMARKET] 📚 Total markets scanned: {len(all_markets)}")
     
-    # Filter and rank by keyword relevance
     filtered = filter_markets_by_keywords(all_markets, queries, max_results=25)
-    log(f"[POLYMARKET] ✅ Filtered to top {len(filtered)} most relevant markets")
+    log(f"[POLYMARKET] ✅ Filtered to top {len(filtered)} markets")
     
     return filtered
 
 def get_tag_ids() -> Dict[str, str]:
-    """
-    Get Polymarket tag IDs.
-    Returns mapping of tag_name -> tag_id
-    """
+    """Get Polymarket tag IDs"""
     try:
         url = f"{POLYMARKET_API_BASE}/tags"
         response = requests.get(url, timeout=10)
         
         if response.status_code != 200:
-            log(f"[POLYMARKET] ⚠️ Failed to fetch tags: HTTP {response.status_code}")
             return {}
         
         tags_data = response.json()
-        
-        # Build mapping
         tag_map = {}
+        
         for tag in tags_data:
             tag_name = tag.get("label", "").lower()
             tag_id = tag.get("id")
             if tag_name and tag_id:
                 tag_map[tag_name] = tag_id
         
-        log(f"[POLYMARKET] 📋 Loaded {len(tag_map)} tag mappings")
+        log(f"[POLYMARKET] 📋 Loaded {len(tag_map)} tags")
         return tag_map
     
     except Exception as e:
@@ -268,7 +217,7 @@ def get_tag_ids() -> Dict[str, str]:
         return {}
 
 def fetch_markets_by_tag(tag_id: str, max_markets: int = 400) -> List[dict]:
-    """Fetch markets filtered by tag - SCANS ALL PAGES"""
+    """Fetch markets by tag"""
     markets = []
     
     for offset in range(0, max_markets, 100):
@@ -285,18 +234,14 @@ def fetch_markets_by_tag(tag_id: str, max_markets: int = 400) -> List[dict]:
             response = requests.get(url, params=params, timeout=10)
             
             if response.status_code != 200:
-                log(f"[POLYMARKET] ⚠️ HTTP {response.status_code} at offset {offset}")
                 break
             
             batch = response.json()
-            if not batch:
+            if not batch or len(batch) < 100:
+                markets.extend(batch if batch else [])
                 break
             
             markets.extend(batch)
-            
-            # Stop if we got fewer than 100 (last page)
-            if len(batch) < 100:
-                break
         
         except Exception as e:
             log(f"[POLYMARKET] ⚠️ Error at offset {offset}: {e}")
@@ -305,7 +250,7 @@ def fetch_markets_by_tag(tag_id: str, max_markets: int = 400) -> List[dict]:
     return markets
 
 def fetch_markets_untagged(queries: List[str], max_markets: int = 400) -> List[dict]:
-    """Fetch markets without tag filter (fallback) - SCANS ALL PAGES"""
+    """Fetch markets without tag"""
     markets = []
     
     for offset in range(0, max_markets, 100):
@@ -321,149 +266,143 @@ def fetch_markets_untagged(queries: List[str], max_markets: int = 400) -> List[d
             response = requests.get(url, params=params, timeout=10)
             
             if response.status_code != 200:
-                log(f"[POLYMARKET] ⚠️ HTTP {response.status_code} at offset {offset}")
                 break
             
             batch = response.json()
-            if not batch:
+            if not batch or len(batch) < 100:
+                markets.extend(batch if batch else [])
                 break
             
             markets.extend(batch)
-            
-            if len(batch) < 100:
-                break
         
         except Exception as e:
-            log(f"[POLYMARKET] ⚠️ Error at offset {offset}: {e}")
+            log(f"[POLYMARKET] ⚠️ Error: {e}")
             break
     
     return markets
 
 def filter_markets_by_keywords(markets: List[dict], queries: List[str], max_results: int = 25) -> List[dict]:
-    """
-    Filter markets by keyword matching with scoring and ranking.
-    
-    Scans ALL markets, scores by relevance, returns top N.
-    Markets with more matching query words rank higher.
-    """
+    """Filter and rank markets by keyword relevance"""
     if not queries:
-        return markets[:max_results]  # Just take first N if no queries
+        return markets[:max_results]
     
-    # Break queries into individual words
     query_words = set()
     for query in queries:
-        words = query.lower().split()
-        query_words.update(words)
+        query_words.update(query.lower().split())
     
-    log(f"[POLYMARKET] 🔍 Scanning {len(markets)} markets for words: {sorted(query_words)[:10]}...")
+    log(f"[POLYMARKET] 🔍 Scanning {len(markets)} markets...")
     
-    # Score each market by number of matching words
     scored_markets = []
     
     for market in markets:
         question = market.get("question", "").lower()
         question_words = set(question.split())
-        
-        # Check if any query word appears in question words
         matches = query_words & question_words
+        
         if matches:
-            # Score by number of matches (more matches = higher priority)
             score = len(matches)
             scored_markets.append((score, market, matches))
     
-    # Sort by score (descending) - best matches first
     scored_markets.sort(key=lambda x: x[0], reverse=True)
     
-    # Log summary
-    log(f"[POLYMARKET] 📊 Found {len(scored_markets)} matching markets (keeping top {max_results})")
+    log(f"[POLYMARKET] 📊 Found {len(scored_markets)} matches (keeping top {max_results})")
     
-    # Log top matches
     for i, (score, market, matches) in enumerate(scored_markets[:max_results], 1):
-        question = market.get('question', '')[:60]
-        log(f"[POLYMARKET] #{i} (score={score}): '{question}...' | words: {matches}")
+        q = market.get('question', '')[:60]
+        log(f"[POLYMARKET] #{i} (score={score}): '{q}...'")
     
-    # Return only the markets (not scores), limited to max_results
-    filtered = [market for score, market, matches in scored_markets[:max_results]]
-    
-    return filtered
+    return [market for score, market, matches in scored_markets[:max_results]]
 
 # ========================================
 # STEP 3: SCORE MARKETS WITH LLM
 # ========================================
 
 def score_markets_with_llm(markets: List[dict], question_obj: dict) -> Optional[dict]:
-    """
-    Use LLM to score markets using Tversky similarity.
-    
-    Returns MK_FINDINGS structure or None if failed.
-    """
+    """Score markets using Tversky similarity"""
     if not markets:
         log("[POLYMARKET] ℹ️ No markets to score")
         return create_empty_mk_findings(question_obj)
     
-    log(f"[POLYMARKET] 🧮 Scoring {len(markets)} markets with Tversky similarity (α=0.7, β=0.3)...")
+    log(f"[POLYMARKET] 🧮 Scoring {len(markets)} markets...")
     
     if not PROMPT_SCORER:
         log("[POLYMARKET] ❌ Scorer prompt not loaded")
         return None
     
-    # Build user message with question + markets
     user_message = "QUESTION_OBJECT:\n" + json.dumps(question_obj, indent=2, ensure_ascii=False)
     user_message += "\n\nMARKETS:\n" + json.dumps(markets, indent=2, ensure_ascii=False)
     
-    # Call LLM
     response = call_llm(
         model=SCORER_MODEL,
         system_prompt=PROMPT_SCORER,
         user_payload=user_message,
         temperature=0.2,
-        max_tokens=8000,
-        timeout=120
+        max_tokens=16000,
+        timeout=180
     )
     
     if not response or len(response) < 50:
-        log("[POLYMARKET] ❌ Empty or invalid response from scorer")
+        log("[POLYMARKET] ❌ Empty response")
         return None
     
-    # Parse JSON response
+    # Check for rate limit
+    if "rate" in response.lower() or "429" in response:
+        log("[POLYMARKET] ⚠️ Rate limit detected - waiting 30s...")
+        time.sleep(30)
+        return None
+    
     try:
         response_clean = response.strip()
         
-        # Remove markdown code blocks if present
-        if response_clean.startswith("```"):
+        # Remove markdown
+        if "```json" in response_clean:
+            start = response_clean.find("```json") + 7
+            end = response_clean.find("```", start)
+            if end > start:
+                response_clean = response_clean[start:end].strip()
+        elif response_clean.startswith("```"):
             lines = response_clean.split("\n")
             response_clean = "\n".join(lines[1:-1]) if len(lines) > 2 else response_clean
         
+        # Find JSON
+        if not response_clean.startswith("{"):
+            start_idx = response_clean.find("{")
+            if start_idx >= 0:
+                response_clean = response_clean[start_idx:]
+        
+        # Find end of JSON
+        depth = 0
+        for i, char in enumerate(response_clean):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    response_clean = response_clean[:i+1]
+                    break
+        
         mk_findings = json.loads(response_clean)
         
-        # Validate structure
-        if not isinstance(mk_findings, dict):
-            log("[POLYMARKET] ❌ Response is not a dict")
-            return None
-        
-        if "items" not in mk_findings:
-            log("[POLYMARKET] ❌ Missing 'items' in response")
+        if not isinstance(mk_findings, dict) or "items" not in mk_findings:
+            log("[POLYMARKET] ❌ Invalid structure")
             return None
         
         items = mk_findings["items"]
-        num_items = len(items) if isinstance(items, list) else 0
-        
-        # Log results by category
         log_scored_markets(items)
         
-        log(f"[POLYMARKET] ✅ MK_FINDINGS complete with {num_items} markets")
+        log(f"[POLYMARKET] ✅ MK_FINDINGS complete with {len(items)} markets")
         return mk_findings
     
     except json.JSONDecodeError as e:
-        log(f"[POLYMARKET] ❌ JSON parse error: {e}")
-        log(f"[POLYMARKET] Response was: {response[:300]}...")
+        log(f"[POLYMARKET] ❌ JSON error: {e}")
+        log(f"[POLYMARKET] Response: {response[:500]}...")
         return None
     except Exception as e:
-        log(f"[POLYMARKET] ❌ Error parsing scorer response: {e}")
+        log(f"[POLYMARKET] ❌ Error: {e}")
         return None
 
 def log_scored_markets(items: List[dict]) -> None:
-    """Log markets grouped by similarity category"""
+    """Log markets by similarity category"""
     if not items:
         return
     
@@ -472,31 +411,28 @@ def log_scored_markets(items: List[dict]) -> None:
     adjacent = [m for m in items if 0.35 <= m.get("similarity_S", 0) < 0.70]
     
     if exact:
-        log(f"[POLYMARKET] ✅ EXACT/NEAR-EXACT MARKETS (S ≥ 0.85):")
-        for m in exact[:3]:  # Show first 3
-            title = m.get("title", "Unknown")[:60]
+        log(f"[POLYMARKET] ✅ EXACT (S ≥ 0.85):")
+        for m in exact[:3]:
+            title = m.get("title", "")[:60]
             sim = m.get("similarity_S", 0)
-            bridge = m.get("bridge_note", "")
-            log(f"  • \"{title}...\" | S={sim:.2f} | {bridge}")
+            log(f"  • \"{title}...\" | S={sim:.2f}")
     
     if similar:
-        log(f"[POLYMARKET] ✅ SIMILAR MARKETS (0.70 ≤ S < 0.85):")
+        log(f"[POLYMARKET] ✅ SIMILAR (0.70-0.85):")
         for m in similar[:3]:
-            title = m.get("title", "Unknown")[:60]
+            title = m.get("title", "")[:60]
             sim = m.get("similarity_S", 0)
-            bridge = m.get("bridge_note", "")
-            log(f"  • \"{title}...\" | S={sim:.2f} | {bridge}")
+            log(f"  • \"{title}...\" | S={sim:.2f}")
     
     if adjacent:
-        log(f"[POLYMARKET] ✅ ADJACENT MARKETS (0.35 ≤ S < 0.70):")
+        log(f"[POLYMARKET] ✅ ADJACENT (0.35-0.70):")
         for m in adjacent[:3]:
-            title = m.get("title", "Unknown")[:60]
+            title = m.get("title", "")[:60]
             sim = m.get("similarity_S", 0)
-            bridge = m.get("bridge_note", "")
-            log(f"  • \"{title}...\" | S={sim:.2f} | {bridge}")
+            log(f"  • \"{title}...\" | S={sim:.2f}")
 
 def create_empty_mk_findings(question_obj: dict) -> dict:
-    """Create empty MK_FINDINGS structure"""
+    """Create empty MK_FINDINGS"""
     return {
         "question_type": question_obj.get("question_type", "binary"),
         "locked_mc": False,
@@ -505,7 +441,6 @@ def create_empty_mk_findings(question_obj: dict) -> dict:
         "items": [],
         "prisma": {
             "identified": 0,
-            "screened": 0,
             "included": 0,
             "excluded": 0,
             "top_exclusion_reasons": ["No markets found"]
@@ -524,14 +459,11 @@ def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optiona
     """
     Main entry point: Get MK_FINDINGS from Polymarket API.
     
-    This function orchestrates the entire workflow:
+    Workflow:
     1. Generate search queries (LLM)
-    2. Search Polymarket API (Python) - scans ALL markets
-    3. Filter to top 25 most relevant (Python)
-    4. Score markets with Tversky (LLM)
-    
-    Returns MK_FINDINGS dict or None if completely failed.
-    Falls back to empty MK_FINDINGS on partial failure.
+    2. Search Polymarket API (Python)
+    3. Filter to top 25 (Python)
+    4. Score with Tversky (LLM)
     """
     log("[POLYMARKET] 🚀 Starting Polymarket API search...")
     
@@ -542,47 +474,47 @@ def get_polymarket_findings(question_obj: dict, max_retries: int = 2) -> Optiona
         if query_result:
             break
         if attempt < max_retries:
-            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries} for query generation...")
+            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries}...")
     
     if not query_result:
-        log("[POLYMARKET] ❌ Failed to generate queries after retries")
+        log("[POLYMARKET] ❌ Failed to generate queries")
         return create_empty_mk_findings(question_obj)
     
     tags = query_result.get("tags", [])
     queries = query_result.get("queries", [])
     
     if not tags:
-        tags = ["politics"]  # Default fallback
-        log("[POLYMARKET] ⚠️ No tags generated, using default: ['politics']")
+        tags = ["politics"]
     
     if not queries:
-        log("[POLYMARKET] ❌ No queries generated")
+        log("[POLYMARKET] ❌ No queries")
         return create_empty_mk_findings(question_obj)
     
-    # Step 2: Search API (scans all, filters to top 25)
+    # Step 2: Search API
     try:
         markets = search_polymarket_api(tags, queries, max_markets=400)
     except Exception as e:
-        log(f"[POLYMARKET] ❌ API search failed: {e}")
+        log(f"[POLYMARKET] ❌ API error: {e}")
         return create_empty_mk_findings(question_obj)
     
     if not markets:
-        log("[POLYMARKET] ℹ️ No markets found matching queries")
+        log("[POLYMARKET] ℹ️ No markets found")
         empty = create_empty_mk_findings(question_obj)
         empty["search_log"]["queries"] = queries
         return empty
     
-    # Step 3: Score markets (only top 25)
+    # Step 3: Score markets
     mk_findings = None
     for attempt in range(1, max_retries + 1):
         mk_findings = score_markets_with_llm(markets, question_obj)
         if mk_findings:
             break
         if attempt < max_retries:
-            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries} for market scoring...")
+            log(f"[POLYMARKET] 🔄 Retry {attempt}/{max_retries}...")
+            time.sleep(5)  # Brief delay between retries
     
     if not mk_findings:
-        log("[POLYMARKET] ❌ Failed to score markets after retries")
+        log("[POLYMARKET] ❌ Failed to score markets")
         return create_empty_mk_findings(question_obj)
     
     return mk_findings
