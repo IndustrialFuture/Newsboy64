@@ -19,37 +19,34 @@ RULES:
 - No operators like "site:", "-", or quotes
 - Keep queries simple and focused
 
-OUTPUT FORMAT - YOU MUST OUTPUT EXACTLY THIS STRUCTURE:
+CRITICAL OUTPUT FORMAT:
+You MUST return a JSON object with EXACTLY this structure.
+Both "tags" and "queries" MUST be ARRAYS (lists), not strings.
+
 {
-  "tags": ["tag1"],
-  "queries": ["query1", "query2", "query3"]
+  "tags": ["tag1", "tag2"],
+  "queries": ["query1", "query2", "query3", "query4"]
 }
 
-CRITICAL: Output ONLY the JSON object above. No other text. No explanations. Just the JSON.
+CORRECT EXAMPLES:
 
-EXAMPLES:
-
-Question: "Will the federal government shutdown end by November 17, 2025?"
-Output:
 {
   "tags": ["politics"],
-  "queries": ["government shutdown end", "shutdown November", "CR passage", "funding bill", "shutdown this week"]
+  "queries": ["government shutdown", "shutdown November", "CR passage", "funding bill"]
 }
 
-Question: "Will Bitcoin reach $100,000 by end of 2025?"
-Output:
 {
-  "tags": ["crypto"],
-  "queries": ["Bitcoin 100000", "Bitcoin 2025", "BTC price", "cryptocurrency milestone"]
+  "tags": ["crypto", "economics"],
+  "queries": ["Bitcoin 100k", "BTC price", "cryptocurrency 2025"]
 }
 
-Question: "Will there be over 2 million electric vehicles sold in the US in 2025?"
-Output:
+INCORRECT EXAMPLES (DO NOT DO THIS):
+
 {
-  "tags": ["business", "economics"],
-  "queries": ["electric vehicle sales 2025", "EV sales US", "electric car market", "vehicle sales 2025"]
+  "tags": "politics",  ❌ WRONG - must be array ["politics"]
+  "queries": "shutdown, funding"  ❌ WRONG - must be array ["shutdown", "funding"]
 }
 
 NOW GENERATE FOR THE PROVIDED QUESTION.
-OUTPUT ONLY THE JSON OBJECT WITH "tags" AND "queries" KEYS.
-NO OTHER TEXT BEFORE OR AFTER THE JSON.
+REMEMBER: Both tags and queries MUST be arrays with square brackets [].
+OUTPUT ONLY THE JSON. NO OTHER TEXT.
